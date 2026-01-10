@@ -5,22 +5,34 @@ import (
 	"os"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Добавили загрузку .env файла
+	if err := godotenv.Load(); err != nil {
+		log.Print("No .env file found") // Не падаем, вдруг переменные заданы через систему
+	}
+
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	// Если токен пустой, лучше сразу упасть с понятной ошибкой
+	if token == "" {
+		log.Panic("TELEGRAM_BOT_TOKEN is not set")
+	}
+
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Panic(err)
 	}
 
+	bot.Debug = true // Включите, чтобы видеть логи общения с API в консоли
+	log.Printf("Authorized on account %s", bot.Self.UserName)
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	updatesChan, err := bot.GetUpdatesChan(u)
-	if err != nil {
-		log.Panic(err)
-	}
+	// ИСПРАВЛЕНИЕ ЗДЕСЬ: получаем только канал
+	updatesChan := bot.GetUpdatesChan(u)
 
 	for update := range updatesChan {
 		if update.Message != nil && update.Message.IsCommand() {
@@ -37,9 +49,4 @@ func main() {
 			bot.Send(msg)
 		}
 	}
-}
-
-func TestBot() {
-	// TODO: Implement a simple test case
-	log.Println("Running bot tests...")
 }
