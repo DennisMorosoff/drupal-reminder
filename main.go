@@ -9,13 +9,12 @@ import (
 )
 
 func main() {
-	// Добавили загрузку .env файла
 	if err := godotenv.Load(); err != nil {
-		log.Print("No .env file found") // Не падаем, вдруг переменные заданы через систему
+		log.Print("No .env file found")
 	}
 
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	// Если токен пустой, лучше сразу упасть с понятной ошибкой
+
 	if token == "" {
 		log.Panic("TELEGRAM_BOT_TOKEN is not set")
 	}
@@ -25,13 +24,12 @@ func main() {
 		log.Panic(err)
 	}
 
-	bot.Debug = true // Включите, чтобы видеть логи общения с API в консоли
+	bot.Debug = true
 	log.Printf("Authorized on account %s", bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 
-	// ИСПРАВЛЕНИЕ ЗДЕСЬ: получаем только канал
 	updatesChan := bot.GetUpdatesChan(u)
 
 	for update := range updatesChan {
