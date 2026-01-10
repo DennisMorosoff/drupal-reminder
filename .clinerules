@@ -1,0 +1,31 @@
+# Go Project Rules
+
+## Coding Style & Idioms
+- **Format**: Always rely on `go fmt` style.
+- **Error Handling**: 
+  - Never ignore errors using `_`.
+  - Prefer `if err != nil { return fmt.Errorf("context: %w", err) }` for wrapping.
+  - Use `errors.Is` and `errors.As` for checking errors.
+- **Concurrency**: 
+  - Never start a goroutine without a stop mechanism (Context or Channel).
+  - Use `sync.RWMutex` over `sync.Mutex` if reads outnumber writes.
+- **Testing**:
+  - Use "Table Driven Tests" pattern for all unit tests.
+  - Use `t.Parallel()` where possible.
+
+## Project Structure
+- Follow "Standard Go Project Layout" (`cmd/`, `internal/`, `pkg/`).
+- Business logic MUST stay in `internal/`.
+- `main.go` should be minimal (only configuration and dependency injection).
+
+## Validation Protocol
+Before claiming a task is done, YOU MUST:
+1. Run `go mod tidy` to clean dependencies.
+2. Run `go build ./...` to ensure no compilation errors.
+3. Run `go vet ./...` to catch common mistakes.
+
+## Quality Control
+If you encounter compilation errors or logic bugs:
+1. Analyze the error message from the terminal.
+2. If available, run `golangci-lint run ./...` to get detailed reports.
+3. Fix the issue and re-run the check.
