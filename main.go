@@ -370,20 +370,25 @@ func (bm *BotManager) handleUpdates() {
 					truncatedContent := truncateToTelegramLimit(content)
 					bm.bot.Send(tgbotapi.NewMessage(chatID, truncatedContent))
 				case "check":
-					url := os.Getenv("DRUPAL_SITE_URL")
-					if url == "" {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "DRUPAL_SITE_URL is not set"))
-						continue
-					}
-
-					firstParagraph, err := fetchFirstParagraph(url)
+					feed, err := bm.fetchRSSFeed()
 					if err != nil {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch first paragraph: "+err.Error()))
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch RSS feed: "+err.Error()))
 						continue
 					}
 
-					truncatedParagraph := truncateToTelegramLimit(firstParagraph)
-					bm.bot.Send(tgbotapi.NewMessage(chatID, truncatedParagraph))
+					if len(feed.Channel.Items) == 0 {
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "No articles found in RSS feed"))
+						continue
+					}
+
+					// Получаем последнюю статью (первая в списке)
+					lastArticle := feed.Channel.Items[0]
+
+					// Отправляем уведомление во все чаты
+					bm.sendNotificationToAllChats(lastArticle)
+
+					// Отправляем подтверждение пользователю
+					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)))
 				default:
 					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch or /check")
 					bm.bot.Send(msg)
