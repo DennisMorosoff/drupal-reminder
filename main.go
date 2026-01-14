@@ -40,6 +40,34 @@ func truncateToTelegramLimit(text string) string {
 	return text[:telegramMessageLimit-3] + "..."
 }
 
+func fetchFirstParagraph(url string) (string, error) {
+	httpResp, err := http.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", httpResp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(httpResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	// Ищем первый параграф
+	firstParagraph := doc.Find("p").First()
+	if firstParagraph.Length() > 0 {
+		text := firstParagraph.Text()
+		if text != "" {
+			return text, nil
+		}
+	}
+
+	return "", fmt.Errorf("no paragraph found on the page")
+}
+
 func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Print("No .env file found")
@@ -85,8 +113,23 @@ func main() {
 
 				truncatedContent := truncateToTelegramLimit(content)
 				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, truncatedContent))
+			case "check":
+				url := os.Getenv("DRUPAL_SITE_URL")
+				if url == "" {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "DRUPAL_SITE_URL is not set"))
+					continue
+				}
+
+				firstParagraph, err := fetchFirstParagraph(url)
+				if err != nil {
+					bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, "Failed to fetch first paragraph: "+err.Error()))
+					continue
+				}
+
+				truncatedParagraph := truncateToTelegramLimit(firstParagraph)
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, truncatedParagraph))
 			default:
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Unknown command. Try /start or /fetch")
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Unknown command. Try /start, /fetch or /check")
 				bot.Send(msg)
 			}
 		} else if update.Message != nil {
