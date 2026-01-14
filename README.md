@@ -39,6 +39,48 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 - The bot will monitor the Drupal site specified in `DRUPAL_SITE_URL`.
 - It will send notifications to the Telegram group chat where it is added.
 
+## Deployment
+
+### Automatic Deployment via GitHub Actions
+
+The bot can be automatically deployed to a server when changes are pushed to the `master` branch.
+
+#### Setup GitHub Secrets
+
+Configure the following secrets in your GitHub repository settings (Settings → Secrets and variables → Actions):
+
+- `DEPLOY_HOST` - Server IP address or domain name (e.g., `192.168.1.100` or `example.com`)
+- `DEPLOY_USER` - SSH username for server access (e.g., `root` or your username)
+- `DEPLOY_SSH_KEY` - Private SSH key for server access (copy the entire private key content)
+- `DEPLOY_PATH` - Deployment path on the server (e.g., `/home/user/drupal-reminder`)
+
+#### How to Generate SSH Key
+
+1. Generate an SSH key pair (if you don't have one):
+   ```sh
+   ssh-keygen -t ed25519 -C "github-actions"
+   ```
+
+2. Copy the public key to your server:
+   ```sh
+   ssh-copy-id -i ~/.ssh/id_ed25519.pub user@your-server
+   ```
+
+3. Copy the private key content and add it to GitHub Secrets as `DEPLOY_SSH_KEY`:
+   ```sh
+   cat ~/.ssh/id_ed25519
+   ```
+
+#### Deployment Process
+
+When you push changes to the `master` branch:
+1. GitHub Actions compiles the bot for Linux
+2. The binary is copied to the server via SCP
+3. The old bot process is stopped
+4. The new bot process is started in the background
+
+The bot logs will be written to `bot.log` in the deployment directory.
+
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request with your changes.
 

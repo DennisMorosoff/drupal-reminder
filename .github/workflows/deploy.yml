@@ -1,0 +1,50 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build application
+        run: |
+          GOOS=linux GOARCH=amd64 go build -o drupal-reminder main.go
+
+      - name: Copy binary to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "drupal-reminder"
+          target: ${{ secrets.DEPLOY_PATH }}
+          strip_components: 0
+
+      - name: Stop old process and start new one
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            # Expand ~ to absolute path if needed (works with both ~/path and absolute paths)
+            DEPLOY_PATH_EXPANDED=$(eval echo "${{ secrets.DEPLOY_PATH }}")
+            cd "$DEPLOY_PATH_EXPANDED"
+            pkill -f drupal-reminder || true
+            sleep 2
+            chmod +x drupal-reminder
+            nohup ./drupal-reminder > bot.log 2>&1 &
+            sleep 1
+            pgrep -f drupal-reminder && echo "Bot started successfully" || echo "Warning: Bot process not found"
