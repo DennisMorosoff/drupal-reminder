@@ -11,6 +11,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const telegramMessageLimit = 4096
+
 func fetchWebsiteContent(url string) (string, error) {
 	httpResp, err := http.Get(url)
 	if err != nil {
@@ -27,11 +29,15 @@ func fetchWebsiteContent(url string) (string, error) {
 		return "", fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	htmlContent, err := doc.Html()
-	if err != nil {
-		return "", fmt.Errorf("failed to get HTML content: %w", err)
+	textContent := doc.Text()
+	return textContent, nil
+}
+
+func truncateToTelegramLimit(text string) string {
+	if len(text) <= telegramMessageLimit {
+		return text
 	}
-	return htmlContent, nil
+	return text[:telegramMessageLimit-3] + "..."
 }
 
 func main() {
@@ -77,7 +83,8 @@ func main() {
 					continue
 				}
 
-				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, content))
+				truncatedContent := truncateToTelegramLimit(content)
+				bot.Send(tgbotapi.NewMessage(update.Message.Chat.ID, truncatedContent))
 			default:
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Unknown command. Try /start or /fetch")
 				bot.Send(msg)
