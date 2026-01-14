@@ -22,6 +22,61 @@ jobs:
         run: |
           GOOS=linux GOARCH=amd64 go build -o drupal-reminder main.go
 
+      - name: Check secrets are set
+        run: |
+          echo "Checking secrets..."
+          if [ -z "${{ secrets.DEPLOY_HOST }}" ]; then
+            echo "❌ DEPLOY_HOST is not set"
+            exit 1
+          else
+            echo "✅ DEPLOY_HOST is set"
+          fi
+          if [ -z "${{ secrets.DEPLOY_USER }}" ]; then
+            echo "❌ DEPLOY_USER is not set"
+            exit 1
+          else
+            echo "✅ DEPLOY_USER is set"
+          fi
+          if [ -z "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "❌ DEPLOY_SSH_KEY is not set"
+            exit 1
+          else
+            echo "✅ DEPLOY_SSH_KEY is set"
+            # Проверяем формат ключа (должен начинаться с -----BEGIN)
+            if echo "${{ secrets.DEPLOY_SSH_KEY }}" | grep -q "BEGIN"; then
+              echo "✅ SSH key format looks correct (contains BEGIN)"
+            else
+              echo "⚠️  Warning: SSH key format might be incorrect (no BEGIN found)"
+            fi
+            # Проверяем длину ключа (должен быть достаточно длинным)
+            KEY_LENGTH=$(echo "${{ secrets.DEPLOY_SSH_KEY }}" | wc -c)
+            if [ "$KEY_LENGTH" -lt 100 ]; then
+              echo "⚠️  Warning: SSH key seems too short ($KEY_LENGTH chars)"
+            else
+              echo "✅ SSH key length looks reasonable ($KEY_LENGTH chars)"
+            fi
+          fi
+          if [ -z "${{ secrets.DEPLOY_PATH }}" ]; then
+            echo "❌ DEPLOY_PATH is not set"
+            exit 1
+          else
+            echo "✅ DEPLOY_PATH is set"
+          fi
+
+      - name: Test SSH connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            echo "✅ SSH connection successful!"
+            echo "Hostname: $(hostname)"
+            echo "User: $(whoami)"
+            echo "Current directory: $(pwd)"
+            echo "Testing write permissions..."
+            touch /tmp/github-actions-test && rm /tmp/github-actions-test && echo "✅ Write permissions OK" || echo "❌ Write permissions failed"
+
       - name: Copy binary to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -31,6 +86,8 @@ jobs:
           source: "drupal-reminder"
           target: ${{ secrets.DEPLOY_PATH }}
           strip_components: 0
+          debug: true
+          timeout: 30s
 
       - name: Stop old process and start new one
         uses: appleboy/ssh-action@v1.0.3
