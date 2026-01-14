@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/PuerkitoBio/goquery"
@@ -10,15 +12,26 @@ import (
 )
 
 func fetchWebsiteContent(url string) (string, error) {
-	resp, err := goquery.NewDocument(url)
+	httpResp, err := http.Get(url)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
-	content, err := resp.Html()
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", httpResp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(httpResp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to parse HTML: %w", err)
 	}
-	return content, nil
+
+	htmlContent, err := doc.Html()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HTML content: %w", err)
+	}
+	return htmlContent, nil
 }
 
 func main() {
