@@ -29,3 +29,13 @@ If you encounter compilation errors or logic bugs:
 1. Analyze the error message from the terminal.
 2. If available, run `golangci-lint run ./...` to get detailed reports.
 3. Fix the issue and re-run the check.
+
+## Editing Stability
+- **Anti-Hallucination for Edits**: Before applying complex edits to a file you haven't read in the last 2 turns, YOU MUST read it first (`read_file`). This is mandatory because `go fmt` or other tools might have changed the file content externally.
+- **Recovery Strategy**: If an edit fails due to "SEARCH block mismatch", STOP. Read the file (`read_file`). Then retry the edit using the fresh content.  Never retry a failed edit blindly. Read the file, then retry.
+
+## Editing & Diffing Rules
+- **Exact Match Required**: When using `apply_diff` or `replace_in_file`, your SEARCH block must match the file content *byte-for-byte*, including all leading whitespace/indentation.
+- **No Guessing**: Do not guess indentation. If you are unsure, use `read_file` to get the exact lines before constructing the SEARCH block.
+- **Handling Indentation**: If the code is indented, your SEARCH block must include that exact indentation.
+- **Fallback**: If a search fails due to whitespace, try reducing the SEARCH block to unique, less-indented lines (like function headers) that are easier to match.
