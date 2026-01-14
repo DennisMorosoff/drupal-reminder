@@ -42,18 +42,55 @@ jobs:
             exit 1
           else
             echo "✅ DEPLOY_SSH_KEY is set"
-            # Проверяем формат ключа (должен начинаться с -----BEGIN)
-            if echo "${{ secrets.DEPLOY_SSH_KEY }}" | grep -q "BEGIN"; then
-              echo "✅ SSH key format looks correct (contains BEGIN)"
+            # Сохраняем ключ во временный файл для проверки
+            mkdir -p ~/.ssh
+            echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/test_key
+            chmod 600 ~/.ssh/test_key
+            
+            # Проверяем формат ключа
+            echo "=== SSH Key Format Check ==="
+            if grep -q "BEGIN OPENSSH PRIVATE KEY" ~/.ssh/test_key; then
+              echo "✅ Key format: OpenSSH private key (new format)"
+            elif grep -q "BEGIN RSA PRIVATE KEY" ~/.ssh/test_key; then
+              echo "✅ Key format: RSA private key (old format)"
+            elif grep -q "BEGIN EC PRIVATE KEY" ~/.ssh/test_key; then
+              echo "✅ Key format: EC private key"
+            elif grep -q "BEGIN" ~/.ssh/test_key; then
+              echo "⚠️  Key format: Unknown BEGIN type"
+              head -1 ~/.ssh/test_key
             else
-              echo "⚠️  Warning: SSH key format might be incorrect (no BEGIN found)"
+              echo "❌ ERROR: Key does not appear to be a private key!"
+              echo "First 100 chars: $(head -c 100 ~/.ssh/test_key)"
+              echo "Key might be a PUBLIC key instead of PRIVATE key!"
             fi
-            # Проверяем длину ключа (должен быть достаточно длинным)
-            KEY_LENGTH=$(echo "${{ secrets.DEPLOY_SSH_KEY }}" | wc -c)
-            if [ "$KEY_LENGTH" -lt 100 ]; then
-              echo "⚠️  Warning: SSH key seems too short ($KEY_LENGTH chars)"
+            
+            # Проверяем, что это НЕ публичный ключ
+            if grep -q "ssh-rsa\|ssh-ed25519\|ecdsa-sha2" ~/.ssh/test_key; then
+              echo "❌ ERROR: This looks like a PUBLIC key, not a PRIVATE key!"
+              echo "You need to use the PRIVATE key (id_rsa, id_ed25519, etc.)"
+            fi
+            
+            # Проверяем длину ключа
+            KEY_LENGTH=$(wc -c < ~/.ssh/test_key)
+            echo "Key length: $KEY_LENGTH bytes"
+            if [ "$KEY_LENGTH" -lt 1000 ]; then
+              echo "⚠️  Warning: SSH key seems too short (should be >1000 bytes)"
+            fi
+            
+            # Пытаемся извлечь публичный ключ из приватного (для проверки)
+            if ssh-keygen -y -f ~/.ssh/test_key > /tmp/test_key.pub 2>/dev/null; then
+              echo "✅ Key is valid and can generate public key"
+              echo "Public key fingerprint:"
+              ssh-keygen -lf /tmp/test_key.pub
             else
-              echo "✅ SSH key length looks reasonable ($KEY_LENGTH chars)"
+              echo "❌ ERROR: Cannot extract public key from private key!"
+              echo "Key might be corrupted or in wrong format"
+            fi
+            
+            # Проверяем, что ключ не требует passphrase (для автоматизации)
+            if grep -q "ENCRYPTED" ~/.ssh/test_key; then
+              echo "⚠️  Warning: Key appears to be encrypted with passphrase"
+              echo "GitHub Actions cannot use encrypted keys without passphrase"
             fi
           fi
           if [ -z "${{ secrets.DEPLOY_PATH }}" ]; then
@@ -62,6 +99,24 @@ jobs:
           else
             echo "✅ DEPLOY_PATH is set"
           fi
+
+      - name: Test SSH connection with verbose output
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/test_key
+          chmod 600 ~/.ssh/test_key
+          
+          echo "=== Testing SSH connection with verbose output ==="
+          ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              -i ~/.ssh/test_key \
+              ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+              "echo 'SSH connection successful!'" || true
+          
+          echo ""
+          echo "=== If connection failed, check above for: ==="
+          echo "1. 'Offering public key' - key is being offered"
+          echo "2. 'Server accepts key' - key is accepted"
+          echo "3. 'Permission denied' - key is rejected"
 
       - name: Test SSH connection
         uses: appleboy/ssh-action@v1.0.3
