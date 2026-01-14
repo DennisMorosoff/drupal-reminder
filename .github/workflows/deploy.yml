@@ -73,8 +73,13 @@ jobs:
             # Проверяем длину ключа
             KEY_LENGTH=$(wc -c < ~/.ssh/test_key)
             echo "Key length: $KEY_LENGTH bytes"
-            if [ "$KEY_LENGTH" -lt 1000 ]; then
-              echo "⚠️  Warning: SSH key seems too short (should be >1000 bytes)"
+            # ED25519 ключи короче, чем RSA, поэтому проверяем по-разному
+            if grep -q "BEGIN OPENSSH PRIVATE KEY" ~/.ssh/test_key && [ "$KEY_LENGTH" -lt 400 ]; then
+              echo "⚠️  Warning: SSH key seems too short for ED25519 (should be >400 bytes)"
+            elif grep -q "BEGIN RSA PRIVATE KEY" ~/.ssh/test_key && [ "$KEY_LENGTH" -lt 1000 ]; then
+              echo "⚠️  Warning: SSH key seems too short for RSA (should be >1000 bytes)"
+            else
+              echo "✅ Key length is acceptable"
             fi
             
             # Пытаемся извлечь публичный ключ из приватного (для проверки)
@@ -82,6 +87,18 @@ jobs:
               echo "✅ Key is valid and can generate public key"
               echo "Public key fingerprint:"
               ssh-keygen -lf /tmp/test_key.pub
+              echo ""
+              echo "=== IMPORTANT: Public key to add to server ==="
+              echo "Add this public key to ~/.ssh/authorized_keys on the server:"
+              echo "---"
+              cat /tmp/test_key.pub
+              echo "---"
+              echo ""
+              echo "On the server, run:"
+              echo "  mkdir -p ~/.ssh"
+              echo "  chmod 700 ~/.ssh"
+              echo "  echo '$(cat /tmp/test_key.pub)' >> ~/.ssh/authorized_keys"
+              echo "  chmod 600 ~/.ssh/authorized_keys"
             else
               echo "❌ ERROR: Cannot extract public key from private key!"
               echo "Key might be corrupted or in wrong format"
