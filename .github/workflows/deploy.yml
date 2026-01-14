@@ -124,16 +124,48 @@ jobs:
           chmod 600 ~/.ssh/test_key
           
           echo "=== Testing SSH connection with verbose output ==="
-          ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          SSH_OUTPUT=$(ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               -i ~/.ssh/test_key \
               ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
-              "echo 'SSH connection successful!'" || true
+              "echo 'SSH connection successful!'" 2>&1) || SSH_FAILED=true
+          
+          echo "$SSH_OUTPUT"
           
           echo ""
-          echo "=== If connection failed, check above for: ==="
-          echo "1. 'Offering public key' - key is being offered"
-          echo "2. 'Server accepts key' - key is accepted"
-          echo "3. 'Permission denied' - key is rejected"
+          echo "=== SSH Connection Analysis ==="
+          if echo "$SSH_OUTPUT" | grep -q "Offering public key"; then
+            echo "✅ Key is being offered to server"
+            KEY_FINGERPRINT=$(echo "$SSH_OUTPUT" | grep "Offering public key" | grep -o "SHA256:[^ ]*" | head -1)
+            echo "   Key fingerprint: $KEY_FINGERPRINT"
+          fi
+          
+          if echo "$SSH_OUTPUT" | grep -q "Permission denied"; then
+            echo "❌ Permission denied - key was rejected by server"
+            echo ""
+            echo "🔧 SOLUTION: Add the public key to server's authorized_keys"
+            echo ""
+            echo "Extracting public key from private key:"
+            echo "---"
+            PUB_KEY=$(ssh-keygen -y -f ~/.ssh/test_key)
+            echo "$PUB_KEY"
+            echo "---"
+            echo ""
+            echo "On your server, run these commands:"
+            echo "  mkdir -p ~/.ssh"
+            echo "  chmod 700 ~/.ssh"
+            echo "  echo '$PUB_KEY' >> ~/.ssh/authorized_keys"
+            echo "  chmod 600 ~/.ssh/authorized_keys"
+            echo ""
+            echo "Then verify with:"
+            echo "  cat ~/.ssh/authorized_keys"
+            echo "  ls -la ~/.ssh/"
+            echo ""
+            echo "Expected output for ls -la ~/.ssh/:"
+            echo "  drwx------ 2 user user 4096 ... ."
+            echo "  -rw------- 1 user user  ... authorized_keys"
+          elif [ -z "$SSH_FAILED" ]; then
+            echo "✅ SSH connection successful!"
+          fi
 
       - name: Test SSH connection
         uses: appleboy/ssh-action@v1.0.3
