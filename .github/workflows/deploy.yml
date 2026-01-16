@@ -347,6 +347,222 @@ jobs:
             echo "Testing write permissions..."
             touch /tmp/github-actions-test && rm /tmp/github-actions-test && echo "✅ Write permissions OK" || echo "❌ Write permissions failed"
 
+      - name: Check SSH server configuration (sshd_config)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            echo "=== SSH Server Configuration Check (sshd_config) ==="
+            echo ""
+            
+            # Функция для проверки значений в sshd_config
+            check_sshd_config() {
+              local key=$1
+              local expected_value=$2
+              local config_file="/etc/ssh/sshd_config"
+              
+              # Проверяем, существует ли файл конфигурации
+              if [ ! -f "$config_file" ]; then
+                echo "❌ SSH config file not found: $config_file"
+                return 1
+              fi
+              
+              # Ищем значение (учитываем закомментированные строки)
+              local actual_value=$(sudo grep -i "^[^#]*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              
+              if [ -z "$actual_value" ]; then
+                # Проверяем закомментированные значения (значение по умолчанию)
+                local commented_value=$(sudo grep -i "^#.*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+                if [ -n "$commented_value" ]; then
+                  actual_value="$commented_value (default, commented)"
+                else
+                  actual_value="not found (using default)"
+                fi
+              fi
+              
+              echo -n "   $key: $actual_value"
+              
+              # Сравниваем с ожидаемым значением, если указано
+              if [ -n "$expected_value" ]; then
+                if echo "$actual_value" | grep -qi "^$expected_value"; then
+                  echo " ✅"
+                  return 0
+                else
+                  echo " ⚠️  (expected: $expected_value)"
+                  return 1
+                fi
+              else
+                echo ""
+                return 0
+              fi
+            }
+            
+            # Проверка 1: PubkeyAuthentication
+            echo "1️⃣  Checking PubkeyAuthentication..."
+            if check_sshd_config "PubkeyAuthentication" "yes"; then
+              echo "   ✅ Public key authentication is enabled"
+            else
+              echo "   ❌ Public key authentication might be disabled!"
+              echo "   🔧 To fix, add to /etc/ssh/sshd_config:"
+              echo "      PubkeyAuthentication yes"
+              echo "   Then restart SSH: sudo systemctl restart ssh"
+            fi
+            echo ""
+            
+            # Проверка 2: PasswordAuthentication (предупреждение если включен)
+            echo "2️⃣  Checking PasswordAuthentication..."
+            if check_sshd_config "PasswordAuthentication" "no"; then
+              echo "   ✅ Password authentication is disabled (recommended for security)"
+            else
+              echo "   ⚠️  Password authentication is enabled (security risk)"
+              echo "   💡 Consider disabling it: PasswordAuthentication no"
+            fi
+            echo ""
+            
+            # Проверка 3: AuthorizedKeysFile
+            echo "3️⃣  Checking AuthorizedKeysFile path..."
+            AUTHORIZED_KEYS_PATH=$(sudo grep -i "^[^#]*AuthorizedKeysFile" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            if [ -z "$AUTHORIZED_KEYS_PATH" ]; then
+              AUTHORIZED_KEYS_PATH="~/.ssh/authorized_keys (default)"
+            fi
+            echo "   AuthorizedKeysFile: $AUTHORIZED_KEYS_PATH"
+            
+            # Проверяем существование authorized_keys файла для текущего пользователя
+            USER_HOME=$(eval echo ~$USER)
+            ACTUAL_AUTH_KEYS="$USER_HOME/.ssh/authorized_keys"
+            if [ -f "$ACTUAL_AUTH_KEYS" ]; then
+              echo "   ✅ authorized_keys file exists: $ACTUAL_AUTH_KEYS"
+              
+              # Проверяем права на файл
+              FILE_PERMS=$(stat -c "%a" "$ACTUAL_AUTH_KEYS" 2>/dev/null || stat -f "%OLp" "$ACTUAL_AUTH_KEYS" 2>/dev/null)
+              if [ "$FILE_PERMS" = "600" ] || [ "$FILE_PERMS" = "644" ]; then
+                echo "   ✅ File permissions: $FILE_PERMS (acceptable)"
+              else
+                echo "   ⚠️  File permissions: $FILE_PERMS (should be 600 or 644)"
+                echo "   🔧 To fix: chmod 600 $ACTUAL_AUTH_KEYS"
+              fi
+            else
+              echo "   ❌ authorized_keys file not found: $ACTUAL_AUTH_KEYS"
+              echo "   🔧 Create it with:"
+              echo "      mkdir -p $USER_HOME/.ssh"
+              echo "      chmod 700 $USER_HOME/.ssh"
+              echo "      touch $ACTUAL_AUTH_KEYS"
+              echo "      chmod 600 $ACTUAL_AUTH_KEYS"
+            fi
+            echo ""
+            
+            # Проверка 4: PermitRootLogin
+            echo "4️⃣  Checking PermitRootLogin..."
+            if check_sshd_config "PermitRootLogin" "no"; then
+              echo "   ✅ Root login is disabled (recommended for security)"
+            else
+              ROOT_LOGIN_VALUE=$(sudo grep -i "^[^#]*PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              if [ "$ROOT_LOGIN_VALUE" = "prohibit-password" ] || [ "$ROOT_LOGIN_VALUE" = "prohibit-password (default, commented)" ]; then
+                echo "   ⚠️  Root login with password disabled, but key-based login allowed"
+              else
+                echo "   ⚠️  Root login is enabled (security risk)"
+                echo "   💡 Consider setting: PermitRootLogin no"
+              fi
+            fi
+            echo ""
+            
+            # Проверка 5: PermitEmptyPasswords
+            echo "5️⃣  Checking PermitEmptyPasswords..."
+            if check_sshd_config "PermitEmptyPasswords" "no"; then
+              echo "   ✅ Empty passwords are disabled"
+            else
+              echo "   ❌ Empty passwords are enabled (security risk!)"
+              echo "   🔧 To fix: PermitEmptyPasswords no"
+            fi
+            echo ""
+            
+            # Проверка 6: MaxAuthTries
+            echo "6️⃣  Checking MaxAuthTries..."
+            MAX_AUTH_TRIES=$(sudo grep -i "^[^#]*MaxAuthTries" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            if [ -z "$MAX_AUTH_TRIES" ]; then
+              MAX_AUTH_TRIES="6 (default)"
+            fi
+            echo "   MaxAuthTries: $MAX_AUTH_TRIES"
+            if [ "$MAX_AUTH_TRIES" -lt 10 ] 2>/dev/null; then
+              echo "   ✅ Reasonable limit for brute force protection"
+            else
+              echo "   ⚠️  High limit might allow more brute force attempts"
+            fi
+            echo ""
+            
+            # Проверка 7: LogLevel
+            echo "7️⃣  Checking LogLevel..."
+            LOG_LEVEL=$(sudo grep -i "^[^#]*LogLevel" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            if [ -z "$LOG_LEVEL" ]; then
+              LOG_LEVEL="INFO (default)"
+            fi
+            echo "   LogLevel: $LOG_LEVEL"
+            if echo "$LOG_LEVEL" | grep -qi "info\|verbose\|debug"; then
+              echo "   ✅ Sufficient logging level for debugging"
+            else
+              echo "   ⚠️  Lower logging level might make debugging harder"
+            fi
+            echo ""
+            
+            # Проверка 8: Проверка прав на .ssh директорию
+            echo "8️⃣  Checking .ssh directory permissions..."
+            if [ -d "$USER_HOME/.ssh" ]; then
+              SSH_DIR_PERMS=$(stat -c "%a" "$USER_HOME/.ssh" 2>/dev/null || stat -f "%OLp" "$USER_HOME/.ssh" 2>/dev/null)
+              echo "   Directory: $USER_HOME/.ssh"
+              echo "   Permissions: $SSH_DIR_PERMS"
+              if [ "$SSH_DIR_PERMS" = "700" ]; then
+                echo "   ✅ Directory permissions are correct (700)"
+              else
+                echo "   ⚠️  Directory permissions should be 700"
+                echo "   🔧 To fix: chmod 700 $USER_HOME/.ssh"
+              fi
+            else
+              echo "   ❌ .ssh directory not found: $USER_HOME/.ssh"
+              echo "   🔧 Create it with: mkdir -p $USER_HOME/.ssh && chmod 700 $USER_HOME/.ssh"
+            fi
+            echo ""
+            
+            # Проверка 9: Проверка, что публичный ключ добавлен в authorized_keys
+            echo "9️⃣  Checking if GitHub Actions public key is in authorized_keys..."
+            if [ -f "$ACTUAL_AUTH_KEYS" ]; then
+              # Пытаемся извлечь публичный ключ из приватного (если есть доступ)
+              # Или просто проверяем, что файл не пустой
+              KEY_COUNT=$(grep -c "ssh-" "$ACTUAL_AUTH_KEYS" 2>/dev/null || echo "0")
+              if [ "$KEY_COUNT" -gt 0 ]; then
+                echo "   ✅ Found $KEY_COUNT SSH public key(s) in authorized_keys"
+                echo "   💡 Make sure GitHub Actions public key is included"
+              else
+                echo "   ❌ No SSH keys found in authorized_keys file"
+                echo "   🔧 Add your public key to: $ACTUAL_AUTH_KEYS"
+              fi
+            fi
+            echo ""
+            
+            # Проверка 10: Проверка состояния SSH сервиса
+            echo "🔟 Checking SSH service status..."
+            if systemctl is-active --quiet ssh || systemctl is-active --quiet sshd; then
+              echo "   ✅ SSH service is running"
+              SSH_SERVICE=$(systemctl is-active ssh 2>/dev/null && echo "ssh" || echo "sshd")
+              echo "   Service name: $SSH_SERVICE"
+            else
+              echo "   ❌ SSH service is not running!"
+              echo "   🔧 Start it with: sudo systemctl start ssh (or sshd)"
+            fi
+            echo ""
+            
+            echo "=== SSH Configuration Check Complete ==="
+            echo ""
+            echo "💡 To view full sshd_config:"
+            echo "   sudo cat /etc/ssh/sshd_config"
+            echo ""
+            echo "💡 To test SSH config without restarting:"
+            echo "   sudo sshd -t"
+            echo ""
+            echo "💡 To apply changes and restart SSH:"
+            echo "   sudo systemctl restart ssh (or sshd)"
+
       - name: Copy binary to server
         uses: appleboy/scp-action@v0.1.7
         with:
