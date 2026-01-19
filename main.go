@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -402,42 +404,80 @@ func (bm *BotManager) handleUpdates() {
 }
 
 func main() {
+	// Логируем начало работы
+	log.Printf("=== Starting Drupal Reminder Bot ===")
+	log.Printf("Working directory: %s", func() string {
+		wd, err := os.Getwd()
+		if err != nil {
+			return fmt.Sprintf("error: %v", err)
+		}
+		return wd
+	}())
+
+	// Загружаем переменные окружения
 	if err := godotenv.Load(); err != nil {
-		log.Print("No .env file found")
+		log.Printf("No .env file found (this is OK if using environment variables): %v", err)
+	} else {
+		log.Printf("✅ .env file loaded successfully")
 	}
 
+	// Проверяем обязательные переменные окружения
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
-		log.Panic("TELEGRAM_BOT_TOKEN is not set")
+		log.Fatal("❌ ERROR: TELEGRAM_BOT_TOKEN is not set. Please set it in .env file or environment variables.")
 	}
+	log.Printf("✅ TELEGRAM_BOT_TOKEN is set (length: %d)", len(token))
 
 	rssURL := os.Getenv("RSS_URL")
 	if rssURL == "" {
 		rssURL = "https://www.dennismorosoff.ru/rss.xml"
+		log.Printf("Using default RSS_URL: %s", rssURL)
+	} else {
+		log.Printf("✅ RSS_URL is set: %s", rssURL)
 	}
 
 	rssAuthUser := os.Getenv("RSS_AUTH_USER")
 	rssAuthPassword := os.Getenv("RSS_AUTH_PASSWORD")
+	if rssAuthUser != "" {
+		log.Printf("✅ RSS_AUTH_USER is set")
+	} else {
+		log.Printf("RSS_AUTH_USER is not set (RSS feed may be public)")
+	}
 
+	// Создаем бота
+	log.Printf("Connecting to Telegram API...")
 	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
-		log.Panic(err)
+		log.Fatalf("❌ ERROR: Failed to create bot API: %v", err)
 	}
 
 	bot.Debug = true
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	log.Printf("✅ Authorized on account %s (ID: %d)", bot.Self.UserName, bot.Self.ID)
 
+	// Настраиваем обработку сигналов для корректного завершения
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Обработка сигналов для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal: %v, shutting down gracefully...", sig)
+		cancel()
+	}()
+
 	// Загружаем состояние
+	log.Printf("Loading state from %s...", stateFileName)
 	state, err := loadState(stateFileName)
 	if err != nil {
-		log.Printf("Failed to load state: %v, starting with empty state", err)
+		log.Printf("⚠️  Failed to load state: %v, starting with empty state", err)
 		state = &State{
 			LastCheckedArticles: []string{},
 			LastCheckTime:       "",
 		}
+	} else {
+		log.Printf("✅ State loaded: %d known articles, last check: %s", len(state.LastCheckedArticles), state.LastCheckTime)
 	}
 
 	// Инициализируем известные статьи
@@ -460,9 +500,17 @@ func main() {
 	}
 
 	// Запускаем горутины
+	log.Printf("Starting RSS monitoring goroutine...")
 	go bm.startRSSMonitoring()
+
+	log.Printf("Starting notification queue goroutine...")
 	go bm.startNotificationQueue()
+
+	log.Printf("✅ Bot is ready and running!")
+	log.Printf("Waiting for Telegram updates...")
 
 	// Запускаем обработку обновлений Telegram (блокирующий вызов)
 	bm.handleUpdates()
+
+	log.Printf("Bot stopped")
 }

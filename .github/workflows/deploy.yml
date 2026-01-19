@@ -715,6 +715,12 @@ jobs:
             echo "=== ЗАПУСК ПРОЦЕССА ==="
             START_METHOD=""
             
+            # Очищаем старый лог перед запуском
+            if [ -f "bot.log" ]; then
+              echo "Clearing old bot.log..."
+              > bot.log
+            fi
+            
             # Пробуем использовать screen для запуска (если доступен)
             if command -v screen > /dev/null 2>&1; then
               START_METHOD="screen"
@@ -729,6 +735,11 @@ jobs:
               else
                 echo "⚠️  Screen session not found in list"
                 screen -list || true
+                # Проверяем логи сразу, если сессия не создана
+                if [ -f "bot.log" ]; then
+                  echo "Checking bot.log for errors:"
+                  cat bot.log || tail -50 bot.log
+                fi
               fi
             # Пробуем использовать tmux (если доступен)
             elif command -v tmux > /dev/null 2>&1; then
@@ -771,7 +782,27 @@ jobs:
             
             # Детальная проверка процесса
             echo "=== ПРОВЕРКА ЗАПУЩЕННОГО ПРОЦЕССА ==="
-            sleep 1  # Даем процессу время запуститься
+            sleep 2  # Даем процессу время запуститься
+            
+            # Сразу проверяем логи на наличие ошибок
+            if [ -f "bot.log" ]; then
+              echo "=== ПРОВЕРКА ЛОГОВ ПЕРЕД ПРОВЕРКОЙ ПРОЦЕССА ==="
+              LOG_SIZE=$(stat -c%s bot.log 2>/dev/null || stat -f%z bot.log 2>/dev/null || echo "0")
+              if [ "$LOG_SIZE" -gt 0 ]; then
+                echo "bot.log exists and has content ($LOG_SIZE bytes)"
+                echo "Last 30 lines of bot.log:"
+                tail -30 bot.log || cat bot.log
+                echo ""
+                # Проверяем на критические ошибки
+                if grep -qi "error\|panic\|fatal" bot.log; then
+                  echo "⚠️  WARNING: Found error messages in bot.log!"
+                  grep -i "error\|panic\|fatal" bot.log | head -10
+                fi
+              else
+                echo "bot.log exists but is empty"
+              fi
+              echo ""
+            fi
             
             if pgrep -f drupal-reminder > /dev/null; then
               PID=$(pgrep -f drupal-reminder)
@@ -834,17 +865,39 @@ jobs:
                 echo "Checking system logs:"
                 dmesg | tail -20 | grep -i "drupal\|killed\|sigterm" || echo "No relevant dmesg entries"
                 echo ""
-                echo "Checking bot.log for errors:"
+                echo "=== DETAILED bot.log ANALYSIS ==="
                 if [ -f "bot.log" ]; then
-                  echo "=== FULL bot.log ==="
-                  cat bot.log || tail -100 bot.log
-                  echo "=== END bot.log ==="
+                  LOG_SIZE=$(stat -c%s bot.log 2>/dev/null || stat -f%z bot.log 2>/dev/null || echo "0")
+                  echo "bot.log size: $LOG_SIZE bytes"
+                  if [ "$LOG_SIZE" -gt 0 ]; then
+                    echo "=== FULL bot.log ==="
+                    cat bot.log || tail -200 bot.log
+                    echo "=== END bot.log ==="
+                    echo ""
+                    echo "=== ERROR SUMMARY ==="
+                    grep -i "error\|panic\|fatal\|failed" bot.log | head -20 || echo "No explicit errors found"
+                  else
+                    echo "bot.log is empty - process may have crashed before writing logs"
+                  fi
                 else
-                  echo "bot.log not found"
+                  echo "bot.log not found - process may have crashed before creating log file"
                 fi
+                echo ""
+                echo "=== TESTING BINARY DIRECTLY ==="
+                echo "Attempting to run binary with timeout to capture startup errors:"
+                timeout 5 ./drupal-reminder 2>&1 || echo "Binary execution failed or timed out"
                 echo ""
                 echo "Checking for core dumps:"
                 ls -lah core* 2>/dev/null || echo "No core dumps found"
+                echo ""
+                echo "Checking file permissions and ownership:"
+                ls -lah ./drupal-reminder
+                echo ""
+                echo "Checking if binary is executable:"
+                test -x ./drupal-reminder && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
+                echo ""
+                echo "Checking binary file type:"
+                file ./drupal-reminder
                 echo ""
                 exit 1
               fi
@@ -867,26 +920,53 @@ jobs:
                 tmux list-sessions || true
               fi
               echo ""
-              echo "Checking bot.log for errors:"
+              echo "=== DETAILED bot.log ANALYSIS ==="
               if [ -f "bot.log" ]; then
-                echo "=== FULL bot.log ==="
-                cat bot.log || tail -100 bot.log
-                echo "=== END bot.log ==="
+                LOG_SIZE=$(stat -c%s bot.log 2>/dev/null || stat -f%z bot.log 2>/dev/null || echo "0")
+                echo "bot.log size: $LOG_SIZE bytes"
+                if [ "$LOG_SIZE" -gt 0 ]; then
+                  echo "=== FULL bot.log ==="
+                  cat bot.log || tail -200 bot.log
+                  echo "=== END bot.log ==="
+                  echo ""
+                  echo "=== ERROR SUMMARY ==="
+                  grep -i "error\|panic\|fatal\|failed" bot.log | head -20 || echo "No explicit errors found"
+                else
+                  echo "bot.log is empty - process may have crashed before writing logs"
+                fi
               else
-                echo "bot.log not found or empty"
+                echo "bot.log not found - process may have crashed before creating log file"
                 echo "Checking if file was created:"
                 ls -lah bot.log 2>&1 || true
               fi
+              echo ""
+              echo "=== TESTING BINARY DIRECTLY ==="
+              echo "Attempting to run binary with timeout to capture startup errors:"
+              timeout 10 ./drupal-reminder 2>&1 || echo "Binary execution failed or timed out"
               echo ""
               echo "Checking system resources:"
               df -h . || true
               free -h || true
               echo ""
-              echo "Checking file permissions:"
+              echo "Checking file permissions and ownership:"
               ls -lah ./drupal-reminder
               echo ""
-              echo "Attempting to run binary directly to see error:"
-              ./drupal-reminder --help 2>&1 || echo "Binary execution test failed"
+              echo "Checking if binary is executable:"
+              test -x ./drupal-reminder && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
+              echo ""
+              echo "Checking binary file type:"
+              file ./drupal-reminder
+              echo ""
+              echo "Checking .env file (if exists):"
+              if [ -f ".env" ]; then
+                echo "✅ .env file exists"
+                echo "File size: $(stat -c%s .env 2>/dev/null || stat -f%z .env 2>/dev/null) bytes"
+                echo "Checking for required variables (without showing values):"
+                grep -q "TELEGRAM_BOT_TOKEN" .env && echo "✅ TELEGRAM_BOT_TOKEN is present" || echo "❌ TELEGRAM_BOT_TOKEN is MISSING"
+              else
+                echo "❌ .env file NOT FOUND"
+                echo "This is likely the cause of the failure!"
+              fi
               echo ""
               exit 1
             fi
