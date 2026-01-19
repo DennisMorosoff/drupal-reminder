@@ -20,7 +20,7 @@ jobs:
 
       - name: Build application
         run: |
-          GOOS=linux GOARCH=amd64 go build -o drupal-reminder main.go
+          GOOS=linux GOARCH=amd64 go build -o drupal-reminder-bot main.go
 
       - name: Check secrets are set
         run: |
@@ -569,7 +569,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          source: "drupal-reminder"
+          source: "drupal-reminder-bot"
           target: ${{ secrets.DEPLOY_PATH }}
           strip_components: 0
           debug: true
@@ -645,28 +645,28 @@ jobs:
             
             # Проверка существования бинарника
             echo "=== ПРОВЕРКА БИНАРНОГО ФАЙЛА ==="
-            if [ ! -f "./drupal-reminder" ]; then
-              echo "❌ ERROR: Binary file drupal-reminder not found!"
+            if [ ! -f "./drupal-reminder-bot" ]; then
+              echo "❌ ERROR: Binary file drupal-reminder-bot not found!"
               echo "Files in directory:"
               ls -lah
               exit 1
             fi
             echo "✅ Binary file exists"
             echo "File info:"
-            ls -lah ./drupal-reminder
-            file ./drupal-reminder || true
+            ls -lah ./drupal-reminder-bot
+            file ./drupal-reminder-bot || true
             echo ""
             
             # Проверка текущих процессов
-            echo "=== ТЕКУЩИЕ ПРОЦЕССЫ drupal-reminder ==="
+            echo "=== ТЕКУЩИЕ ПРОЦЕССЫ drupal-reminder-bot ==="
             OLD_PID=""
-            if pgrep -f drupal-reminder > /dev/null; then
+            if pgrep -f drupal-reminder-bot > /dev/null; then
               echo "Found existing processes:"
-              ps aux | grep -E "[d]rupal-reminder" || true
+              ps aux | grep -E "[d]rupal-reminder-bot" || true
               # Сохраняем PID первого найденного процесса
-              OLD_PID=$(pgrep -f drupal-reminder | head -1)
+              OLD_PID=$(pgrep -f drupal-reminder-bot | head -1)
               echo "Old process PID: $OLD_PID"
-              pgrep -f drupal-reminder | xargs ps -fp 2>/dev/null || true
+              pgrep -f drupal-reminder-bot | xargs ps -fp 2>/dev/null || true
             else
               echo "No existing processes found"
             fi
@@ -705,7 +705,7 @@ jobs:
             
             # Дополнительная проверка, что все процессы остановлены
             sleep 1
-            REMAINING_PIDS=$(pgrep -f drupal-reminder 2>/dev/null || echo "")
+            REMAINING_PIDS=$(pgrep -f drupal-reminder-bot 2>/dev/null || echo "")
             if [ -n "$REMAINING_PIDS" ]; then
               echo "⚠️  Warning: Found remaining processes: $REMAINING_PIDS"
               echo "This might be from screen/tmux sessions, will be handled during startup"
@@ -714,9 +714,9 @@ jobs:
             
             # Устанавливаем права на выполнение
             echo "=== УСТАНОВКА ПРАВ НА ВЫПОЛНЕНИЕ ==="
-            chmod +x drupal-reminder
+            chmod +x drupal-reminder-bot
             echo "File permissions after chmod:"
-            ls -lah ./drupal-reminder
+            ls -lah ./drupal-reminder-bot
             echo ""
             
             # Проверка .env файла ДО запуска процесса
@@ -771,7 +771,7 @@ jobs:
               START_METHOD="screen"
               echo "Using screen for process isolation..."
               SCREEN_EXIT_CODE=0
-              screen -dmS drupal-reminder bash -c "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || SCREEN_EXIT_CODE=$?
+              screen -dmS drupal-reminder bash -c "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder-bot > bot.log 2>&1" 2>&1 | tee -a deploy.log || SCREEN_EXIT_CODE=$?
               echo "Screen command executed, exit code: $SCREEN_EXIT_CODE"
               sleep 3
               # Проверяем, что screen сессия создана
@@ -782,7 +782,7 @@ jobs:
                 SCREEN_PID=$(screen -list | grep drupal-reminder | awk -F'.' '{print $1}' | awk '{print $1}' | head -1)
                 if [ -n "$SCREEN_PID" ]; then
                   # Получаем PID реального процесса
-                  NEW_PID=$(pgrep -P "$SCREEN_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+                  NEW_PID=$(pgrep -P "$SCREEN_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
                   if [ -n "$NEW_PID" ]; then
                     echo "New process PID: $NEW_PID"
                   fi
@@ -807,7 +807,7 @@ jobs:
               START_METHOD="tmux"
               echo "Using tmux for process isolation..."
               TMUX_EXIT_CODE=0
-              tmux new-session -d -s drupal-reminder "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || TMUX_EXIT_CODE=$?
+              tmux new-session -d -s drupal-reminder "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder-bot > bot.log 2>&1" 2>&1 | tee -a deploy.log || TMUX_EXIT_CODE=$?
               echo "Tmux command executed, exit code: $TMUX_EXIT_CODE"
               sleep 3
               # Проверяем, что tmux сессия создана
@@ -817,7 +817,7 @@ jobs:
                 # Пытаемся получить PID процесса из tmux
                 TMUX_PID=$(tmux list-sessions -F "#{session_name} #{pane_pid}" 2>/dev/null | grep drupal-reminder | awk '{print $2}' | head -1)
                 if [ -n "$TMUX_PID" ]; then
-                  NEW_PID=$(pgrep -P "$TMUX_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+                  NEW_PID=$(pgrep -P "$TMUX_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
                   if [ -n "$NEW_PID" ]; then
                     echo "New process PID: $NEW_PID"
                   fi
@@ -841,13 +841,13 @@ jobs:
               START_METHOD="at"
               echo "Using at for delayed start..."
               AT_EXIT_CODE=0
-              echo "cd '$DEPLOY_PATH_EXPANDED' && nohup ./drupal-reminder > bot.log 2>&1 &" | at now 2>&1 | tee -a deploy.log || AT_EXIT_CODE=$?
+              echo "cd '$DEPLOY_PATH_EXPANDED' && nohup ./drupal-reminder-bot > bot.log 2>&1 &" | at now 2>&1 | tee -a deploy.log || AT_EXIT_CODE=$?
               echo "At command executed, exit code: $AT_EXIT_CODE"
               sleep 3
               # Проверяем очередь at
               atq || true
               # Пытаемся получить PID процесса после запуска через at
-              NEW_PID=$(pgrep -f drupal-reminder | head -1)
+              NEW_PID=$(pgrep -f drupal-reminder-bot | head -1)
               if [ -n "$NEW_PID" ]; then
                 echo "New process PID: $NEW_PID"
               fi
@@ -858,13 +858,13 @@ jobs:
             else
               START_METHOD="nohup"
               echo "Using nohup with full process isolation..."
-              echo "Command: (cd \"$DEPLOY_PATH_EXPANDED\" && nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &)"
+              echo "Command: (cd \"$DEPLOY_PATH_EXPANDED\" && nohup ./drupal-reminder-bot > bot.log 2>&1 < /dev/null &)"
               # Запускаем через отдельную оболочку с полным отвязыванием
-              (cd "$DEPLOY_PATH_EXPANDED" && nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &)
+              (cd "$DEPLOY_PATH_EXPANDED" && nohup ./drupal-reminder-bot > bot.log 2>&1 < /dev/null &)
               NOHUP_PID=$!
               echo "Nohup command executed, background PID: $NOHUP_PID"
               # Используем PID оболочки как начальную точку поиска
-              NEW_PID=$(pgrep -P "$NOHUP_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+              NEW_PID=$(pgrep -P "$NOHUP_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
               if [ -n "$NEW_PID" ]; then
                 echo "New process PID: $NEW_PID"
               fi
@@ -899,7 +899,7 @@ jobs:
                   echo ""
                   
                   # Если найдены критические ошибки, проверяем процесс
-                  if ! pgrep -f drupal-reminder > /dev/null; then
+                  if ! pgrep -f drupal-reminder-bot > /dev/null; then
                     echo "❌ Process has crashed! Checking detailed logs..."
                     echo "=== FULL bot.log ==="
                     cat bot.log || tail -200 bot.log
@@ -922,7 +922,7 @@ jobs:
             
             # Определяем PID процесса для проверки
             if [ -z "$NEW_PID" ]; then
-              NEW_PID=$(pgrep -f drupal-reminder | head -1)
+              NEW_PID=$(pgrep -f drupal-reminder-bot | head -1)
             fi
             
             if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
@@ -930,10 +930,10 @@ jobs:
               echo "✅ Process found with PID: $PID"
               echo ""
               echo "Process details:"
-              ps aux | grep -E "[d]rupal-reminder" || true
+              ps aux | grep -E "[d]rupal-reminder-bot" || true
               echo ""
               echo "Process tree:"
-              pstree -p $PID 2>/dev/null || ps -ef | grep -E "[d]rupal-reminder" || true
+              pstree -p $PID 2>/dev/null || ps -ef | grep -E "[d]rupal-reminder-bot" || true
               echo ""
               echo "Process status from /proc:"
               if [ -d "/proc/$PID" ]; then
@@ -965,7 +965,7 @@ jobs:
               sleep 3
               
               # Проверяем, что процесс все еще работает
-              CURRENT_PID=$(pgrep -f drupal-reminder | head -1)
+              CURRENT_PID=$(pgrep -f drupal-reminder-bot | head -1)
               if [ -n "$CURRENT_PID" ] && kill -0 "$CURRENT_PID" 2>/dev/null; then
                 echo "✅ Process is still running (PID: $CURRENT_PID)"
                 if [ "$PID" != "$CURRENT_PID" ]; then
@@ -973,7 +973,7 @@ jobs:
                 fi
                 echo ""
                 echo "Final process status:"
-                ps aux | grep -E "[d]rupal-reminder" || true
+                ps aux | grep -E "[d]rupal-reminder-bot" || true
                 echo ""
                 echo "✅✅✅ DEPLOYMENT SUCCESSFUL ✅✅✅"
               else
@@ -991,8 +991,8 @@ jobs:
                   echo "PID was not set"
                 fi
                 echo ""
-                echo "Checking for any drupal-reminder processes:"
-                ps aux | grep drupal-reminder || echo "No processes found"
+                echo "Checking for any drupal-reminder-bot processes:"
+                ps aux | grep drupal-reminder-bot || echo "No processes found"
                 echo ""
                 echo "Checking system logs:"
                 dmesg | tail -20 | grep -i "drupal\|killed\|sigterm" || echo "No relevant dmesg entries"
@@ -1017,19 +1017,19 @@ jobs:
                 echo ""
                 echo "=== TESTING BINARY DIRECTLY ==="
                 echo "Attempting to run binary with timeout to capture startup errors:"
-                timeout 5 ./drupal-reminder 2>&1 || echo "Binary execution failed or timed out"
+                timeout 5 ./drupal-reminder-bot 2>&1 || echo "Binary execution failed or timed out"
                 echo ""
                 echo "Checking for core dumps:"
                 ls -lah core* 2>/dev/null || echo "No core dumps found"
                 echo ""
                 echo "Checking file permissions and ownership:"
-                ls -lah ./drupal-reminder
+                ls -lah ./drupal-reminder-bot
                 echo ""
                 echo "Checking if binary is executable:"
-                test -x ./drupal-reminder && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
+                test -x ./drupal-reminder-bot && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
                 echo ""
                 echo "Checking binary file type:"
-                file ./drupal-reminder
+                file ./drupal-reminder-bot
                 echo ""
                 exit 1
               fi
@@ -1041,8 +1041,8 @@ jobs:
               echo "Checking all processes:"
               ps aux | head -20
               echo ""
-              echo "Checking for any drupal-reminder processes:"
-              ps aux | grep drupal-reminder || echo "No processes found"
+              echo "Checking for any drupal-reminder-bot processes:"
+              ps aux | grep drupal-reminder-bot || echo "No processes found"
               echo ""
               if [ "$START_METHOD" = "screen" ]; then
                 echo "Screen sessions:"
@@ -1074,20 +1074,20 @@ jobs:
               echo ""
               echo "=== TESTING BINARY DIRECTLY ==="
               echo "Attempting to run binary with timeout to capture startup errors:"
-              timeout 10 ./drupal-reminder 2>&1 || echo "Binary execution failed or timed out"
+              timeout 10 ./drupal-reminder-bot 2>&1 || echo "Binary execution failed or timed out"
               echo ""
               echo "Checking system resources:"
               df -h . || true
               free -h || true
               echo ""
               echo "Checking file permissions and ownership:"
-              ls -lah ./drupal-reminder
+              ls -lah ./drupal-reminder-bot
               echo ""
               echo "Checking if binary is executable:"
-              test -x ./drupal-reminder && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
+              test -x ./drupal-reminder-bot && echo "✅ Binary is executable" || echo "❌ Binary is NOT executable"
               echo ""
               echo "Checking binary file type:"
-              file ./drupal-reminder
+              file ./drupal-reminder-bot
               echo ""
               echo "Checking .env file (if exists):"
               if [ -f ".env" ]; then

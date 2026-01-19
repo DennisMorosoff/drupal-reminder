@@ -34,8 +34,8 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 
 3. **Build and run the bot:**
    ```sh
-   go build -o drupal-reminder main.go
-   ./drupal-reminder
+   go build -o drupal-reminder-bot main.go
+   ./drupal-reminder-bot
    ```
 
 ### Configuration
@@ -312,7 +312,7 @@ After=network.target
 Type=simple
 User=github-runner
 WorkingDirectory=/home/github-runner/drupal-reminder
-ExecStart=/home/github-runner/drupal-reminder/drupal-reminder
+ExecStart=/home/github-runner/drupal-reminder/drupal-reminder-bot
 Restart=always
 RestartSec=10
 StandardOutput=journal
