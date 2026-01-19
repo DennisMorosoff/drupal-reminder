@@ -659,32 +659,57 @@ jobs:
             
             # Проверка текущих процессов
             echo "=== ТЕКУЩИЕ ПРОЦЕССЫ drupal-reminder ==="
+            OLD_PID=""
             if pgrep -f drupal-reminder > /dev/null; then
               echo "Found existing processes:"
               ps aux | grep -E "[d]rupal-reminder" || true
+              # Сохраняем PID первого найденного процесса
+              OLD_PID=$(pgrep -f drupal-reminder | head -1)
+              echo "Old process PID: $OLD_PID"
               pgrep -f drupal-reminder | xargs ps -fp 2>/dev/null || true
             else
               echo "No existing processes found"
             fi
             echo ""
             
-            # Останавливаем старый процесс
+            # Безопасная остановка старого процесса по конкретному PID
             echo "=== ОСТАНОВКА СТАРОГО ПРОЦЕССА ==="
-            pkill -f drupal-reminder || echo "No process to kill (this is OK)"
-            sleep 2
-            
-            # Убеждаемся, что процесс действительно остановлен
-            if pgrep -f drupal-reminder > /dev/null; then
-              echo "⚠️  Process still running, force killing..."
-              pkill -9 -f drupal-reminder || true
-              sleep 1
-              if pgrep -f drupal-reminder > /dev/null; then
-                echo "❌ ERROR: Failed to kill process!"
-                ps aux | grep -E "[d]rupal-reminder" || true
-                exit 1
+            if [ -n "$OLD_PID" ]; then
+              echo "Stopping old process with PID: $OLD_PID"
+              # Проверяем, что процесс еще существует
+              if kill -0 "$OLD_PID" 2>/dev/null; then
+                echo "Sending SIGTERM to PID $OLD_PID..."
+                kill "$OLD_PID" 2>/dev/null || true
+                sleep 2
+                
+                # Проверяем, остановился ли процесс
+                if kill -0 "$OLD_PID" 2>/dev/null; then
+                  echo "⚠️  Process still running, force killing with SIGKILL..."
+                  kill -9 "$OLD_PID" 2>/dev/null || true
+                  sleep 1
+                  
+                  # Финальная проверка
+                  if kill -0 "$OLD_PID" 2>/dev/null; then
+                    echo "❌ ERROR: Failed to kill process with PID $OLD_PID!"
+                    ps aux | grep -E "[d]rupal-reminder" || true
+                    exit 1
+                  fi
+                fi
+                echo "✅ Old process (PID $OLD_PID) stopped successfully"
+              else
+                echo "Process with PID $OLD_PID no longer exists"
               fi
+            else
+              echo "No old process to stop"
             fi
-            echo "✅ Old process stopped"
+            
+            # Дополнительная проверка, что все процессы остановлены
+            sleep 1
+            REMAINING_PIDS=$(pgrep -f drupal-reminder 2>/dev/null || echo "")
+            if [ -n "$REMAINING_PIDS" ]; then
+              echo "⚠️  Warning: Found remaining processes: $REMAINING_PIDS"
+              echo "This might be from screen/tmux sessions, will be handled during startup"
+            fi
             echo ""
             
             # Устанавливаем права на выполнение
@@ -694,8 +719,9 @@ jobs:
             ls -lah ./drupal-reminder
             echo ""
             
-            # Проверка .env файла
+            # Проверка .env файла ДО запуска процесса
             echo "=== ПРОВЕРКА КОНФИГУРАЦИИ ==="
+            ENV_CHECK_FAILED=false
             if [ -f ".env" ]; then
               echo "✅ .env file exists"
               echo "File permissions: $(ls -lah .env | awk '{print $1, $3, $4}')"
@@ -703,35 +729,64 @@ jobs:
               # Проверяем наличие обязательных переменных (без вывода значений)
               if grep -q "TELEGRAM_BOT_TOKEN" .env; then
                 echo "✅ TELEGRAM_BOT_TOKEN found in .env"
+                # Проверяем, что токен не пустой
+                if grep -q "^TELEGRAM_BOT_TOKEN=\s*$" .env || grep -q "^TELEGRAM_BOT_TOKEN=\"\"" .env || grep -q "^TELEGRAM_BOT_TOKEN=''" .env; then
+                  echo "❌ ERROR: TELEGRAM_BOT_TOKEN is empty in .env file!"
+                  ENV_CHECK_FAILED=true
+                fi
               else
-                echo "⚠️  TELEGRAM_BOT_TOKEN not found in .env"
+                echo "❌ ERROR: TELEGRAM_BOT_TOKEN not found in .env"
+                ENV_CHECK_FAILED=true
               fi
             else
-              echo "⚠️  .env file not found (may use environment variables)"
+              echo "❌ ERROR: .env file not found!"
+              echo "The bot requires .env file with TELEGRAM_BOT_TOKEN to run."
+              ENV_CHECK_FAILED=true
+            fi
+            
+            # Если проверка не прошла, прерываем деплой
+            if [ "$ENV_CHECK_FAILED" = "true" ]; then
+              echo ""
+              echo "❌❌❌ CONFIGURATION ERROR ❌❌❌"
+              echo "Cannot start process without proper configuration."
+              echo "Please ensure .env file exists and contains valid TELEGRAM_BOT_TOKEN"
+              exit 1
             fi
             echo ""
             
             # Запуск процесса с детальным логированием
             echo "=== ЗАПУСК ПРОЦЕССА ==="
             START_METHOD=""
+            NEW_PID=""  # Инициализируем переменную для PID нового процесса
             
-            # Очищаем старый лог перед запуском
+            # Сохраняем старые логи вместо очистки
             if [ -f "bot.log" ]; then
-              echo "Clearing old bot.log..."
-              > bot.log
+              echo "Saving old bot.log to bot.log.old..."
+              mv bot.log bot.log.old || true
+              echo "✅ Old log saved"
             fi
             
             # Пробуем использовать screen для запуска (если доступен)
             if command -v screen > /dev/null 2>&1; then
               START_METHOD="screen"
               echo "Using screen for process isolation..."
-              screen -dmS drupal-reminder bash -c "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || echo "Screen command output: $?"
-              echo "Screen command executed, exit code: $?"
+              SCREEN_EXIT_CODE=0
+              screen -dmS drupal-reminder bash -c "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || SCREEN_EXIT_CODE=$?
+              echo "Screen command executed, exit code: $SCREEN_EXIT_CODE"
               sleep 3
               # Проверяем, что screen сессия создана
               if screen -list | grep -q drupal-reminder; then
                 echo "✅ Screen session created successfully"
                 screen -list
+                # Пытаемся получить PID процесса из screen
+                SCREEN_PID=$(screen -list | grep drupal-reminder | awk -F'.' '{print $1}' | awk '{print $1}' | head -1)
+                if [ -n "$SCREEN_PID" ]; then
+                  # Получаем PID реального процесса
+                  NEW_PID=$(pgrep -P "$SCREEN_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+                  if [ -n "$NEW_PID" ]; then
+                    echo "New process PID: $NEW_PID"
+                  fi
+                fi
               else
                 echo "⚠️  Screen session not found in list"
                 screen -list || true
@@ -739,32 +794,66 @@ jobs:
                 if [ -f "bot.log" ]; then
                   echo "Checking bot.log for errors:"
                   cat bot.log || tail -50 bot.log
+                  if grep -qiE "error|panic|fatal|failed" bot.log; then
+                    echo "❌ Errors found in logs - process may have failed to start"
+                  fi
+                fi
+                if [ "$SCREEN_EXIT_CODE" != "0" ]; then
+                  echo "⚠️  Screen command exited with non-zero code: $SCREEN_EXIT_CODE"
                 fi
               fi
             # Пробуем использовать tmux (если доступен)
             elif command -v tmux > /dev/null 2>&1; then
               START_METHOD="tmux"
               echo "Using tmux for process isolation..."
-              tmux new-session -d -s drupal-reminder "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || echo "Tmux command output: $?"
-              echo "Tmux command executed, exit code: $?"
+              TMUX_EXIT_CODE=0
+              tmux new-session -d -s drupal-reminder "cd '$DEPLOY_PATH_EXPANDED' && exec ./drupal-reminder > bot.log 2>&1" 2>&1 | tee -a deploy.log || TMUX_EXIT_CODE=$?
+              echo "Tmux command executed, exit code: $TMUX_EXIT_CODE"
               sleep 3
               # Проверяем, что tmux сессия создана
               if tmux list-sessions 2>/dev/null | grep -q drupal-reminder; then
                 echo "✅ Tmux session created successfully"
                 tmux list-sessions
+                # Пытаемся получить PID процесса из tmux
+                TMUX_PID=$(tmux list-sessions -F "#{session_name} #{pane_pid}" 2>/dev/null | grep drupal-reminder | awk '{print $2}' | head -1)
+                if [ -n "$TMUX_PID" ]; then
+                  NEW_PID=$(pgrep -P "$TMUX_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+                  if [ -n "$NEW_PID" ]; then
+                    echo "New process PID: $NEW_PID"
+                  fi
+                fi
               else
                 echo "⚠️  Tmux session not found in list"
                 tmux list-sessions || true
+                if [ -f "bot.log" ]; then
+                  echo "Checking bot.log for errors:"
+                  tail -50 bot.log || cat bot.log
+                  if grep -qiE "error|panic|fatal|failed" bot.log; then
+                    echo "❌ Errors found in logs - process may have failed to start"
+                  fi
+                fi
+                if [ "$TMUX_EXIT_CODE" != "0" ]; then
+                  echo "⚠️  Tmux command exited with non-zero code: $TMUX_EXIT_CODE"
+                fi
               fi
             # Используем at для отложенного запуска (если доступен)
             elif command -v at > /dev/null 2>&1; then
               START_METHOD="at"
               echo "Using at for delayed start..."
-              echo "cd '$DEPLOY_PATH_EXPANDED' && nohup ./drupal-reminder > bot.log 2>&1 &" | at now 2>&1 | tee -a deploy.log || echo "At command output: $?"
-              echo "At command executed, exit code: $?"
+              AT_EXIT_CODE=0
+              echo "cd '$DEPLOY_PATH_EXPANDED' && nohup ./drupal-reminder > bot.log 2>&1 &" | at now 2>&1 | tee -a deploy.log || AT_EXIT_CODE=$?
+              echo "At command executed, exit code: $AT_EXIT_CODE"
               sleep 3
               # Проверяем очередь at
               atq || true
+              # Пытаемся получить PID процесса после запуска через at
+              NEW_PID=$(pgrep -f drupal-reminder | head -1)
+              if [ -n "$NEW_PID" ]; then
+                echo "New process PID: $NEW_PID"
+              fi
+              if [ "$AT_EXIT_CODE" != "0" ]; then
+                echo "⚠️  At command exited with non-zero code: $AT_EXIT_CODE"
+              fi
             # Финальный вариант: используем nohup с максимальным отвязыванием
             else
               START_METHOD="nohup"
@@ -774,10 +863,18 @@ jobs:
               (cd "$DEPLOY_PATH_EXPANDED" && nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &)
               NOHUP_PID=$!
               echo "Nohup command executed, background PID: $NOHUP_PID"
+              # Используем PID оболочки как начальную точку поиска
+              NEW_PID=$(pgrep -P "$NOHUP_PID" | head -1 || pgrep -f drupal-reminder | head -1)
+              if [ -n "$NEW_PID" ]; then
+                echo "New process PID: $NEW_PID"
+              fi
               sleep 4
             fi
             
             echo "Start method used: $START_METHOD"
+            if [ -n "$NEW_PID" ]; then
+              echo "New process PID from startup: $NEW_PID"
+            fi
             echo ""
             
             # Детальная проверка процесса
@@ -785,27 +882,51 @@ jobs:
             sleep 2  # Даем процессу время запуститься
             
             # Сразу проверяем логи на наличие ошибок
+            echo "=== ПРОВЕРКА ЛОГОВ СРАЗУ ПОСЛЕ ЗАПУСКА ==="
             if [ -f "bot.log" ]; then
-              echo "=== ПРОВЕРКА ЛОГОВ ПЕРЕД ПРОВЕРКОЙ ПРОЦЕССА ==="
               LOG_SIZE=$(stat -c%s bot.log 2>/dev/null || stat -f%z bot.log 2>/dev/null || echo "0")
               if [ "$LOG_SIZE" -gt 0 ]; then
                 echo "bot.log exists and has content ($LOG_SIZE bytes)"
-                echo "Last 30 lines of bot.log:"
-                tail -30 bot.log || cat bot.log
+                echo ""
+                echo "=== Last 50 lines of bot.log ==="
+                tail -50 bot.log || cat bot.log
                 echo ""
                 # Проверяем на критические ошибки
-                if grep -qi "error\|panic\|fatal" bot.log; then
+                if grep -qiE "error|panic|fatal|failed" bot.log; then
                   echo "⚠️  WARNING: Found error messages in bot.log!"
-                  grep -i "error\|panic\|fatal" bot.log | head -10
+                  echo "=== ERROR SUMMARY ==="
+                  grep -iE "error|panic|fatal|failed" bot.log | head -15
+                  echo ""
+                  
+                  # Если найдены критические ошибки, проверяем процесс
+                  if ! pgrep -f drupal-reminder > /dev/null; then
+                    echo "❌ Process has crashed! Checking detailed logs..."
+                    echo "=== FULL bot.log ==="
+                    cat bot.log || tail -200 bot.log
+                    echo "=== END bot.log ==="
+                    exit 1
+                  fi
+                fi
+                
+                # Проверяем успешный запуск в логах
+                if grep -qiE "starting drupal reminder bot|authorized on account|bot is ready" bot.log; then
+                  echo "✅ Found startup success indicators in logs"
                 fi
               else
-                echo "bot.log exists but is empty"
+                echo "bot.log exists but is empty - process may still be initializing"
               fi
-              echo ""
+            else
+              echo "⚠️  bot.log not found yet - process may still be starting"
+            fi
+            echo ""
+            
+            # Определяем PID процесса для проверки
+            if [ -z "$NEW_PID" ]; then
+              NEW_PID=$(pgrep -f drupal-reminder | head -1)
             fi
             
-            if pgrep -f drupal-reminder > /dev/null; then
-              PID=$(pgrep -f drupal-reminder)
+            if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
+              PID=$NEW_PID
               echo "✅ Process found with PID: $PID"
               echo ""
               echo "Process details:"
@@ -843,11 +964,12 @@ jobs:
               echo "=== ПОВТОРНАЯ ПРОВЕРКА ЧЕРЕЗ 3 СЕКУНДЫ ==="
               sleep 3
               
-              if pgrep -f drupal-reminder > /dev/null; then
-                NEW_PID=$(pgrep -f drupal-reminder)
-                echo "✅ Process is still running (PID: $NEW_PID)"
-                if [ "$PID" != "$NEW_PID" ]; then
-                  echo "⚠️  WARNING: PID changed from $PID to $NEW_PID (process may have restarted)"
+              # Проверяем, что процесс все еще работает
+              CURRENT_PID=$(pgrep -f drupal-reminder | head -1)
+              if [ -n "$CURRENT_PID" ] && kill -0 "$CURRENT_PID" 2>/dev/null; then
+                echo "✅ Process is still running (PID: $CURRENT_PID)"
+                if [ "$PID" != "$CURRENT_PID" ]; then
+                  echo "⚠️  WARNING: PID changed from $PID to $CURRENT_PID (process may have restarted)"
                 fi
                 echo ""
                 echo "Final process status:"
@@ -857,7 +979,17 @@ jobs:
               else
                 echo "❌❌❌ PROCESS DISAPPEARED AFTER INITIAL CHECK ❌❌❌"
                 echo ""
-                echo "Original PID was: $PID"
+                if [ -n "$PID" ]; then
+                  echo "Original PID was: $PID"
+                  echo "Checking if process with PID $PID still exists:"
+                  if kill -0 "$PID" 2>/dev/null; then
+                    echo "⚠️  Process with PID $PID still exists"
+                  else
+                    echo "✅ Process with PID $PID is gone (as expected if it crashed)"
+                  fi
+                else
+                  echo "PID was not set"
+                fi
                 echo ""
                 echo "Checking for any drupal-reminder processes:"
                 ps aux | grep drupal-reminder || echo "No processes found"
