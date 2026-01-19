@@ -585,9 +585,36 @@ jobs:
             # Expand ~ to absolute path if needed (works with both ~/path and absolute paths)
             DEPLOY_PATH_EXPANDED=$(eval echo "${{ secrets.DEPLOY_PATH }}")
             cd "$DEPLOY_PATH_EXPANDED"
+            
+            # Останавливаем старый процесс
             pkill -f drupal-reminder || true
             sleep 2
+            
+            # Убеждаемся, что процесс действительно остановлен
+            if pgrep -f drupal-reminder > /dev/null; then
+              echo "Force killing remaining processes..."
+              pkill -9 -f drupal-reminder || true
+              sleep 1
+            fi
+            
+            # Устанавливаем права на выполнение
             chmod +x drupal-reminder
-            nohup ./drupal-reminder > bot.log 2>&1 &
-            sleep 1
-            pgrep -f drupal-reminder && echo "Bot started successfully" || echo "Warning: Bot process not found"
+            
+            # Запускаем процесс в фоне с полным отвязыванием от терминала
+            # Используем setsid для создания новой сессии, независимой от SSH
+            setsid nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &
+            
+            # Даем процессу время запуститься
+            sleep 3
+            
+            # Проверяем, что процесс запущен
+            if pgrep -f drupal-reminder > /dev/null; then
+              PID=$(pgrep -f drupal-reminder)
+              echo "✅ Bot started successfully (PID: $PID)"
+              ps aux | grep -E "[d]rupal-reminder" || true
+            else
+              echo "❌ Warning: Bot process not found after startup"
+              echo "Checking bot.log for errors:"
+              tail -20 bot.log 2>/dev/null || echo "bot.log not found or empty"
+              exit 1
+            fi

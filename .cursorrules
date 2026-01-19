@@ -1,0 +1,35 @@
+## Git Commit Messages
+
+When generating git commit messages:
+
+### Language
+- **Always use Russian language** for commit messages
+
+### Format (Conventional Commits)
+- Follow Conventional Commits specification
+- Structure: <type>[optional scope]: <description>
+
+### Types (use in English)
+- feat: новая функциональность
+- fix: исправление бага
+- docs: изменения в документации
+- refactor: рефакторинг кода без изменения функциональности
+- test: добавление или изменение тестов
+- chore: рутинные задачи, обновление зависимостей
+- perf: улучшение производительности
+- style: форматирование кода, отступы
+- ci: изменения в CI/CD конфигурации
+
+### Rules
+- Use imperative mood in Russian (добавить, исправить, обновить)
+- Keep subject line under 50 characters
+- Start with lowercase letter after colon
+- No period at the end of subject line
+- Add blank line before body if needed
+- Wrap body at 72 characters
+
+### Examples
+- feat: добавить авторизацию через OAuth
+- fix: исправить утечку памяти в обработчике событий
+- docs: обновить README с примерами использования
+- refactor(api): упростить валидацию входных данных
