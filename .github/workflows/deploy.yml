@@ -581,6 +581,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          command_timeout: 30s
           script: |
             # Expand ~ to absolute path if needed (works with both ~/path and absolute paths)
             DEPLOY_PATH_EXPANDED=$(eval echo "${{ secrets.DEPLOY_PATH }}")
@@ -600,21 +601,48 @@ jobs:
             # Устанавливаем права на выполнение
             chmod +x drupal-reminder
             
-            # Запускаем процесс в фоне с полным отвязыванием от терминала
-            # Используем setsid для создания новой сессии, независимой от SSH
-            setsid nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &
-            
-            # Даем процессу время запуститься
-            sleep 3
+            # Пробуем использовать screen для запуска (если доступен)
+            if command -v screen > /dev/null 2>&1; then
+              echo "Using screen for process isolation..."
+              screen -dmS drupal-reminder bash -c "cd '$DEPLOY_PATH_EXPANDED' && ./drupal-reminder > bot.log 2>&1"
+              sleep 3
+            # Пробуем использовать tmux (если доступен)
+            elif command -v tmux > /dev/null 2>&1; then
+              echo "Using tmux for process isolation..."
+              tmux new-session -d -s drupal-reminder "cd '$DEPLOY_PATH_EXPANDED' && ./drupal-reminder > bot.log 2>&1"
+              sleep 3
+            # Используем at для отложенного запуска (если доступен)
+            elif command -v at > /dev/null 2>&1; then
+              echo "Using at for delayed start..."
+              echo "cd '$DEPLOY_PATH_EXPANDED' && nohup ./drupal-reminder > bot.log 2>&1 &" | at now
+              sleep 3
+            # Финальный вариант: используем nohup с максимальным отвязыванием
+            else
+              echo "Using nohup with full process isolation..."
+              # Запускаем через отдельную оболочку с полным отвязыванием
+              (cd "$DEPLOY_PATH_EXPANDED" && nohup ./drupal-reminder > bot.log 2>&1 < /dev/null &)
+              sleep 4
+            fi
             
             # Проверяем, что процесс запущен
             if pgrep -f drupal-reminder > /dev/null; then
               PID=$(pgrep -f drupal-reminder)
               echo "✅ Bot started successfully (PID: $PID)"
               ps aux | grep -E "[d]rupal-reminder" || true
+              
+              # Дополнительная проверка через 2 секунды
+              sleep 2
+              if pgrep -f drupal-reminder > /dev/null; then
+                echo "✅ Process is still running after additional check"
+              else
+                echo "⚠️  Process disappeared after initial check"
+                echo "Checking bot.log for errors:"
+                tail -30 bot.log 2>/dev/null || echo "bot.log not found or empty"
+                exit 1
+              fi
             else
               echo "❌ Warning: Bot process not found after startup"
               echo "Checking bot.log for errors:"
-              tail -20 bot.log 2>/dev/null || echo "bot.log not found or empty"
+              tail -30 bot.log 2>/dev/null || echo "bot.log not found or empty"
               exit 1
             fi
