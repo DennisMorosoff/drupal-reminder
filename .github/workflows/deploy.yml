@@ -659,14 +659,15 @@ jobs:
             
             # Проверка текущих процессов
             echo "=== ТЕКУЩИЕ ПРОЦЕССЫ drupal-reminder-bot ==="
+            PROC_PATTERN='^[^ ]*/drupal-reminder-bot($| )'
             OLD_PID=""
-            if pgrep -f drupal-reminder-bot > /dev/null; then
+            if pgrep -f "$PROC_PATTERN" > /dev/null; then
               echo "Found existing processes:"
               ps aux | grep -E "[d]rupal-reminder-bot" || true
               # Сохраняем PID первого найденного процесса
-              OLD_PID=$(pgrep -f drupal-reminder-bot | head -1)
+              OLD_PID=$(pgrep -f "$PROC_PATTERN" | head -1)
               echo "Old process PID: $OLD_PID"
-              pgrep -f drupal-reminder-bot | xargs ps -fp 2>/dev/null || true
+              pgrep -f "$PROC_PATTERN" | xargs ps -fp 2>/dev/null || true
             else
               echo "No existing processes found"
             fi
@@ -705,7 +706,7 @@ jobs:
             
             # Дополнительная проверка, что все процессы остановлены
             sleep 1
-            REMAINING_PIDS=$(pgrep -f drupal-reminder-bot 2>/dev/null || echo "")
+            REMAINING_PIDS=$(pgrep -f "$PROC_PATTERN" 2>/dev/null || echo "")
             if [ -n "$REMAINING_PIDS" ]; then
               echo "⚠️  Warning: Found remaining processes: $REMAINING_PIDS"
               echo "This might be from screen/tmux sessions, will be handled during startup"
@@ -782,7 +783,7 @@ jobs:
                 SCREEN_PID=$(screen -list | grep drupal-reminder | awk -F'.' '{print $1}' | awk '{print $1}' | head -1)
                 if [ -n "$SCREEN_PID" ]; then
                   # Получаем PID реального процесса
-                  NEW_PID=$(pgrep -P "$SCREEN_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
+                  NEW_PID=$(pgrep -P "$SCREEN_PID" | head -1 || pgrep -f "$PROC_PATTERN" | head -1)
                   if [ -n "$NEW_PID" ]; then
                     echo "New process PID: $NEW_PID"
                   fi
@@ -817,7 +818,7 @@ jobs:
                 # Пытаемся получить PID процесса из tmux
                 TMUX_PID=$(tmux list-sessions -F "#{session_name} #{pane_pid}" 2>/dev/null | grep drupal-reminder | awk '{print $2}' | head -1)
                 if [ -n "$TMUX_PID" ]; then
-                  NEW_PID=$(pgrep -P "$TMUX_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
+                  NEW_PID=$(pgrep -P "$TMUX_PID" | head -1 || pgrep -f "$PROC_PATTERN" | head -1)
                   if [ -n "$NEW_PID" ]; then
                     echo "New process PID: $NEW_PID"
                   fi
@@ -847,7 +848,7 @@ jobs:
               # Проверяем очередь at
               atq || true
               # Пытаемся получить PID процесса после запуска через at
-              NEW_PID=$(pgrep -f drupal-reminder-bot | head -1)
+              NEW_PID=$(pgrep -f "$PROC_PATTERN" | head -1)
               if [ -n "$NEW_PID" ]; then
                 echo "New process PID: $NEW_PID"
               fi
@@ -864,7 +865,7 @@ jobs:
               NOHUP_PID=$!
               echo "Nohup command executed, background PID: $NOHUP_PID"
               # Используем PID оболочки как начальную точку поиска
-              NEW_PID=$(pgrep -P "$NOHUP_PID" | head -1 || pgrep -f drupal-reminder-bot | head -1)
+              NEW_PID=$(pgrep -P "$NOHUP_PID" | head -1 || pgrep -f "$PROC_PATTERN" | head -1)
               if [ -n "$NEW_PID" ]; then
                 echo "New process PID: $NEW_PID"
               fi
@@ -899,7 +900,7 @@ jobs:
                   echo ""
                   
                   # Если найдены критические ошибки, проверяем процесс
-                  if ! pgrep -f drupal-reminder-bot > /dev/null; then
+                  if ! pgrep -f "$PROC_PATTERN" > /dev/null; then
                     echo "❌ Process has crashed! Checking detailed logs..."
                     echo "=== FULL bot.log ==="
                     cat bot.log || tail -200 bot.log
@@ -922,7 +923,7 @@ jobs:
             
             # Определяем PID процесса для проверки
             if [ -z "$NEW_PID" ]; then
-              NEW_PID=$(pgrep -f drupal-reminder-bot | head -1)
+              NEW_PID=$(pgrep -f "$PROC_PATTERN" | head -1)
             fi
             
             if [ -n "$NEW_PID" ] && kill -0 "$NEW_PID" 2>/dev/null; then
@@ -965,7 +966,7 @@ jobs:
               sleep 3
               
               # Проверяем, что процесс все еще работает
-              CURRENT_PID=$(pgrep -f drupal-reminder-bot | head -1)
+              CURRENT_PID=$(pgrep -f "$PROC_PATTERN" | head -1)
               if [ -n "$CURRENT_PID" ] && kill -0 "$CURRENT_PID" 2>/dev/null; then
                 echo "✅ Process is still running (PID: $CURRENT_PID)"
                 if [ "$PID" != "$CURRENT_PID" ]; then
