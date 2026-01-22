@@ -20,7 +20,13 @@ jobs:
 
       - name: Build application
         run: |
-          GOOS=linux GOARCH=amd64 go build -o drupal-reminder-bot main.go
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+          echo "Building with version: $VERSION"
+          echo "Build time: $BUILD_TIME"
+          echo "Commit: $COMMIT"
+          GOOS=linux GOARCH=amd64 go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME -X main.commitHash=$COMMIT" -o drupal-reminder-bot main.go
 
       - name: Check secrets are set
         run: |
