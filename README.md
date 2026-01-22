@@ -28,6 +28,8 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
    TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
    DRUPAL_SITE_URL=https://example.com
    RSS_URL=https://www.dennismorosoff.ru/rss.xml
+   DRUPAL_AUTH_METHOD=basic
+   DRUPAL_LOGIN_URL=/user/login
    RSS_AUTH_USER=rss_user_if_needed
    RSS_AUTH_PASSWORD=rss_password_if_needed
    ```
@@ -42,6 +44,9 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 - The bot will monitor the Drupal site specified in `DRUPAL_SITE_URL`
 - The bot will send notifications to the Telegram group chat where it is added
 - Default RSS URL: `https://www.dennismorosoff.ru/rss.xml`
+- `DRUPAL_AUTH_METHOD=basic` uses HTTP Basic Auth when fetching RSS
+- `DRUPAL_AUTH_METHOD=cookie` logs in via `DRUPAL_LOGIN_URL` and uses session cookies
+- For private articles, ensure the authenticated user role can access the RSS View
 
 ### Bot Commands
 - `/start` - Start working with the bot

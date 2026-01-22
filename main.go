@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +20,12 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/joho/godotenv"
+)
+
+var (
+	version    = "dev"
+	buildTime  = "unknown"
+	commitHash = "unknown"
 )
 
 const (
@@ -57,6 +67,9 @@ type BotManager struct {
 	rssURL           string
 	rssAuthUser      string
 	rssAuthPassword  string
+	authMethod       string
+	loginURL         string
+	httpClient       *http.Client
 	stateFile        string
 	knownArticles    map[string]bool
 	knownArticlesMu  sync.RWMutex
@@ -74,21 +87,160 @@ func truncateToTelegramLimit(text string) string {
 	return text[:telegramMessageLimit-3] + "..."
 }
 
-func fetchWebsiteContent(url string, username string, password string) (string, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func resolveURL(baseURL string, pathOrURL string) (string, error) {
+	if strings.HasPrefix(pathOrURL, "http://") || strings.HasPrefix(pathOrURL, "https://") {
+		return pathOrURL, nil
+	}
+
+	base, err := url.Parse(baseURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", fmt.Errorf("failed to parse base URL: %w", err)
 	}
 
-	if username != "" && password != "" {
-		req.SetBasicAuth(username, password)
+	ref, err := url.Parse(pathOrURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
 
+	return base.ResolveReference(ref).String(), nil
+}
+
+func (bm *BotManager) newRequest(method string, targetURL string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest(method, targetURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if bm.authMethod == "basic" && bm.rssAuthUser != "" && bm.rssAuthPassword != "" {
+		req.SetBasicAuth(bm.rssAuthUser, bm.rssAuthPassword)
+	}
+
+	return req, nil
+}
+
+func initAuthClient(rssURL string, authMethod string, loginURL string, username string, password string) (*http.Client, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
 
-	httpResp, err := client.Do(req)
+	switch authMethod {
+	case "basic":
+		return client, nil
+	case "cookie":
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cookie jar: %w", err)
+		}
+		client.Jar = jar
+
+		if err := loginToDrupal(client, rssURL, loginURL, username, password); err != nil {
+			return nil, err
+		}
+		return client, nil
+	default:
+		return nil, fmt.Errorf("unsupported DRUPAL_AUTH_METHOD: %s", authMethod)
+	}
+}
+
+func loginToDrupal(client *http.Client, rssURL string, loginURL string, username string, password string) error {
+	if username == "" || password == "" {
+		return fmt.Errorf("DRUPAL_AUTH_METHOD=cookie requires RSS_AUTH_USER and RSS_AUTH_PASSWORD")
+	}
+
+	loginPageURL, err := resolveURL(rssURL, loginURL)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Get(loginPageURL)
+	if err != nil {
+		return fmt.Errorf("failed to load login page: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("login page returned status: %d", resp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to parse login page: %w", err)
+	}
+
+	form := doc.Find("form#user-login-form").First()
+	if form.Length() == 0 {
+		form = doc.Find("form").First()
+	}
+	if form.Length() == 0 {
+		return fmt.Errorf("login form not found on login page")
+	}
+
+	action, exists := form.Attr("action")
+	if !exists || strings.TrimSpace(action) == "" {
+		action = loginPageURL
+	}
+	actionURL, err := resolveURL(loginPageURL, action)
+	if err != nil {
+		return err
+	}
+
+	values := url.Values{}
+	values.Set("name", username)
+	values.Set("pass", password)
+
+	form.Find("input").Each(func(_ int, input *goquery.Selection) {
+		name, hasName := input.Attr("name")
+		if !hasName || name == "" {
+			return
+		}
+		if name == "name" || name == "pass" {
+			return
+		}
+		if value, ok := input.Attr("value"); ok {
+			values.Set(name, value)
+		}
+	})
+
+	if values.Get("form_id") == "" {
+		values.Set("form_id", "user_login_form")
+	}
+	if values.Get("op") == "" {
+		values.Set("op", "Log in")
+	}
+
+	req, err := http.NewRequest("POST", actionURL, strings.NewReader(values.Encode()))
+	if err != nil {
+		return fmt.Errorf("failed to create login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	postResp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to submit login form: %w", err)
+	}
+	defer postResp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(postResp.Body)
+	bodyText := string(bodyBytes)
+
+	if postResp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("login failed with status: %d", postResp.StatusCode)
+	}
+
+	if strings.Contains(bodyText, "user-login-form") && strings.Contains(postResp.Request.URL.Path, "user/login") {
+		return fmt.Errorf("login failed: check username/password")
+	}
+
+	return nil
+}
+
+func (bm *BotManager) fetchWebsiteContent(targetURL string) (string, error) {
+	req, err := bm.newRequest("GET", targetURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	httpResp, err := bm.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
@@ -110,21 +262,13 @@ func fetchWebsiteContent(url string, username string, password string) (string, 
 	return textContent, nil
 }
 
-func fetchFirstParagraph(url string, username string, password string) (string, error) {
-	req, err := http.NewRequest("GET", url, nil)
+func (bm *BotManager) fetchFirstParagraph(targetURL string) (string, error) {
+	req, err := bm.newRequest("GET", targetURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return "", err
 	}
 
-	if username != "" && password != "" {
-		req.SetBasicAuth(username, password)
-	}
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	httpResp, err := client.Do(req)
+	httpResp, err := bm.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
@@ -186,20 +330,12 @@ func saveState(filename string, state *State) error {
 
 // Получение RSS с HTTP Basic Auth
 func (bm *BotManager) fetchRSSFeed() (*RSSFeed, error) {
-	req, err := http.NewRequest("GET", bm.rssURL, nil)
+	req, err := bm.newRequest("GET", bm.rssURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if bm.rssAuthUser != "" && bm.rssAuthPassword != "" {
-		req.SetBasicAuth(bm.rssAuthUser, bm.rssAuthPassword)
-	}
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-
-	resp, err := client.Do(req)
+	resp, err := bm.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch RSS: %w", err)
 	}
@@ -340,6 +476,33 @@ func (bm *BotManager) sendNotificationToAllChats(item RSSItem) {
 	}
 }
 
+// Отправка уведомления во все чаты с превью статьи
+func (bm *BotManager) sendNotificationToAllChatsWithPreview(item RSSItem, preview string) {
+	message := fmt.Sprintf("📰 Новая статья: %s\n\n🔗 %s", item.Title, item.Link)
+	if preview != "" {
+		message += preview
+	}
+
+	bm.chatsMu.RLock()
+	chatIDs := make([]int64, 0, len(bm.chats))
+	for chatID := range bm.chats {
+		chatIDs = append(chatIDs, chatID)
+	}
+	bm.chatsMu.RUnlock()
+
+	if len(chatIDs) == 0 {
+		log.Printf("No chats registered, skipping notification for article: %s", item.Title)
+		return
+	}
+
+	for _, chatID := range chatIDs {
+		msg := tgbotapi.NewMessage(chatID, truncateToTelegramLimit(message))
+		if _, err := bm.bot.Send(msg); err != nil {
+			log.Printf("Failed to send notification to chat %d: %v", chatID, err)
+		}
+	}
+}
+
 // Добавление чата в список
 func (bm *BotManager) addChat(chatID int64) {
 	bm.chatsMu.Lock()
@@ -395,7 +558,7 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
-					content, err := fetchWebsiteContent(url, bm.rssAuthUser, bm.rssAuthPassword)
+					content, err := bm.fetchWebsiteContent(url)
 					if err != nil {
 						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch website content: "+err.Error()))
 						continue
@@ -418,13 +581,35 @@ func (bm *BotManager) handleUpdates() {
 					// Получаем последнюю статью (первая в списке)
 					lastArticle := feed.Channel.Items[0]
 
+					// Пытаемся получить первый абзац статьи с авторизацией
+					firstParagraph, err := bm.fetchFirstParagraph(lastArticle.Link)
+					var articlePreview string
+					if err != nil {
+						log.Printf("Failed to fetch article content for /check: %v", err)
+						articlePreview = ""
+					} else {
+						articlePreview = "\n\n" + firstParagraph
+					}
+
 					// Отправляем уведомление во все чаты
-					bm.sendNotificationToAllChats(lastArticle)
+					bm.sendNotificationToAllChatsWithPreview(lastArticle, articlePreview)
 
 					// Отправляем подтверждение пользователю
-					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)))
+					confirmationMsg := fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)
+					if articlePreview != "" {
+						confirmationMsg += articlePreview
+					}
+					bm.bot.Send(tgbotapi.NewMessage(chatID, truncateToTelegramLimit(confirmationMsg)))
+				case "about":
+					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
+						"Версия: %s\n"+
+						"Сборка: %s\n"+
+						"Коммит: %s",
+						version, buildTime, commitHash)
+					msg := tgbotapi.NewMessage(chatID, versionInfo)
+					bm.bot.Send(msg)
 				default:
-					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch or /check")
+					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch, /check or /about")
 					bm.bot.Send(msg)
 				}
 			} else if update.Message.Text != "" {
@@ -476,6 +661,22 @@ func main() {
 		log.Printf("RSS_AUTH_USER is not set (RSS feed may be public)")
 	}
 
+	authMethod := strings.ToLower(strings.TrimSpace(os.Getenv("DRUPAL_AUTH_METHOD")))
+	if authMethod == "" {
+		authMethod = "basic"
+	}
+	loginURL := strings.TrimSpace(os.Getenv("DRUPAL_LOGIN_URL"))
+	if loginURL == "" {
+		loginURL = "/user/login"
+	}
+	log.Printf("✅ DRUPAL_AUTH_METHOD: %s", authMethod)
+	log.Printf("✅ DRUPAL_LOGIN_URL: %s", loginURL)
+
+	authClient, err := initAuthClient(rssURL, authMethod, loginURL, rssAuthUser, rssAuthPassword)
+	if err != nil {
+		log.Fatalf("❌ ERROR: Failed to init auth client: %v", err)
+	}
+
 	// Создаем бота
 	log.Printf("Connecting to Telegram API...")
 	bot, err := tgbotapi.NewBotAPI(token)
@@ -523,6 +724,9 @@ func main() {
 		rssURL:           rssURL,
 		rssAuthUser:      rssAuthUser,
 		rssAuthPassword:  rssAuthPassword,
+		authMethod:       authMethod,
+		loginURL:         loginURL,
+		httpClient:       authClient,
 		stateFile:        stateFileName,
 		knownArticles:    knownArticles,
 		chats:            make(map[int64]bool),

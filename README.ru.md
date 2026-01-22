@@ -28,6 +28,8 @@
    TELEGRAM_BOT_TOKEN=ваш_токен_telegram_бота
    DRUPAL_SITE_URL=https://example.com
    RSS_URL=https://www.dennismorosoff.ru/rss.xml
+   DRUPAL_AUTH_METHOD=basic
+   DRUPAL_LOGIN_URL=/user/login
    RSS_AUTH_USER=пользователь_для_rss_если_нужен
    RSS_AUTH_PASSWORD=пароль_для_rss_если_нужен
    ```
@@ -42,6 +44,9 @@
 - Бот будет отслеживать сайт Drupal, указанный в `DRUPAL_SITE_URL`
 - Бот будет отправлять уведомления в групповой чат Telegram, куда он добавлен
 - RSS URL по умолчанию: `https://www.dennismorosoff.ru/rss.xml`
+- `DRUPAL_AUTH_METHOD=basic` использует HTTP Basic Auth при запросе RSS
+- `DRUPAL_AUTH_METHOD=cookie` логинится в Drupal через `DRUPAL_LOGIN_URL` и использует сессионные cookies
+- Для закрытых статей убедитесь, что роль авторизованного пользователя имеет доступ к RSS View
 
 ### Команды бота
 - `/start` - Начать работу с ботом
