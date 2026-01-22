@@ -74,14 +74,30 @@ func truncateToTelegramLimit(text string) string {
 	return text[:telegramMessageLimit-3] + "..."
 }
 
-func fetchWebsiteContent(url string) (string, error) {
-	httpResp, err := http.Get(url)
+func fetchWebsiteContent(url string, username string, password string) (string, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if username != "" && password != "" {
+		req.SetBasicAuth(username, password)
+	}
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	httpResp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
+		if httpResp.StatusCode == http.StatusUnauthorized || httpResp.StatusCode == http.StatusForbidden {
+			return "", fmt.Errorf("authentication failed (status code: %d). Check your credentials", httpResp.StatusCode)
+		}
 		return "", fmt.Errorf("unexpected status code: %d", httpResp.StatusCode)
 	}
 
@@ -94,14 +110,30 @@ func fetchWebsiteContent(url string) (string, error) {
 	return textContent, nil
 }
 
-func fetchFirstParagraph(url string) (string, error) {
-	httpResp, err := http.Get(url)
+func fetchFirstParagraph(url string, username string, password string) (string, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if username != "" && password != "" {
+		req.SetBasicAuth(username, password)
+	}
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	httpResp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch URL: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode != http.StatusOK {
+		if httpResp.StatusCode == http.StatusUnauthorized || httpResp.StatusCode == http.StatusForbidden {
+			return "", fmt.Errorf("authentication failed (status code: %d). Check your credentials", httpResp.StatusCode)
+		}
 		return "", fmt.Errorf("unexpected status code: %d", httpResp.StatusCode)
 	}
 
@@ -363,7 +395,7 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
-					content, err := fetchWebsiteContent(url)
+					content, err := fetchWebsiteContent(url, bm.rssAuthUser, bm.rssAuthPassword)
 					if err != nil {
 						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch website content: "+err.Error()))
 						continue
