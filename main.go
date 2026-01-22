@@ -22,6 +22,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var (
+	version    = "dev"
+	buildTime  = "unknown"
+	commitHash = "unknown"
+)
+
 const (
 	telegramMessageLimit = 4096
 	stateFileName        = "state.json"
@@ -594,8 +600,16 @@ func (bm *BotManager) handleUpdates() {
 						confirmationMsg += articlePreview
 					}
 					bm.bot.Send(tgbotapi.NewMessage(chatID, truncateToTelegramLimit(confirmationMsg)))
+				case "about":
+					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
+						"Версия: %s\n"+
+						"Сборка: %s\n"+
+						"Коммит: %s",
+						version, buildTime, commitHash)
+					msg := tgbotapi.NewMessage(chatID, versionInfo)
+					bm.bot.Send(msg)
 				default:
-					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch or /check")
+					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch, /check or /about")
 					bm.bot.Send(msg)
 				}
 			} else if update.Message.Text != "" {
