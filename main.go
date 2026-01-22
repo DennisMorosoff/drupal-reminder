@@ -340,6 +340,33 @@ func (bm *BotManager) sendNotificationToAllChats(item RSSItem) {
 	}
 }
 
+// Отправка уведомления во все чаты с превью статьи
+func (bm *BotManager) sendNotificationToAllChatsWithPreview(item RSSItem, preview string) {
+	message := fmt.Sprintf("📰 Новая статья: %s\n\n🔗 %s", item.Title, item.Link)
+	if preview != "" {
+		message += preview
+	}
+
+	bm.chatsMu.RLock()
+	chatIDs := make([]int64, 0, len(bm.chats))
+	for chatID := range bm.chats {
+		chatIDs = append(chatIDs, chatID)
+	}
+	bm.chatsMu.RUnlock()
+
+	if len(chatIDs) == 0 {
+		log.Printf("No chats registered, skipping notification for article: %s", item.Title)
+		return
+	}
+
+	for _, chatID := range chatIDs {
+		msg := tgbotapi.NewMessage(chatID, truncateToTelegramLimit(message))
+		if _, err := bm.bot.Send(msg); err != nil {
+			log.Printf("Failed to send notification to chat %d: %v", chatID, err)
+		}
+	}
+}
+
 // Добавление чата в список
 func (bm *BotManager) addChat(chatID int64) {
 	bm.chatsMu.Lock()
@@ -418,11 +445,25 @@ func (bm *BotManager) handleUpdates() {
 					// Получаем последнюю статью (первая в списке)
 					lastArticle := feed.Channel.Items[0]
 
+					// Пытаемся получить первый абзац статьи с авторизацией
+					firstParagraph, err := fetchFirstParagraph(lastArticle.Link, bm.rssAuthUser, bm.rssAuthPassword)
+					var articlePreview string
+					if err != nil {
+						log.Printf("Failed to fetch article content for /check: %v", err)
+						articlePreview = ""
+					} else {
+						articlePreview = "\n\n" + firstParagraph
+					}
+
 					// Отправляем уведомление во все чаты
-					bm.sendNotificationToAllChats(lastArticle)
+					bm.sendNotificationToAllChatsWithPreview(lastArticle, articlePreview)
 
 					// Отправляем подтверждение пользователю
-					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)))
+					confirmationMsg := fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)
+					if articlePreview != "" {
+						confirmationMsg += articlePreview
+					}
+					bm.bot.Send(tgbotapi.NewMessage(chatID, truncateToTelegramLimit(confirmationMsg)))
 				default:
 					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch or /check")
 					bm.bot.Send(msg)
