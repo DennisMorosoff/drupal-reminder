@@ -35,8 +35,31 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
    ```
 
 3. **Build and run the bot:**
+   
+   **Option 1: Using build script (recommended - automatically sets version from git):**
+   ```sh
+   # Linux/macOS
+   ./build.sh
+   
+   # Windows
+   build.bat
+   ```
+   
+   **Option 2: Manual build:**
    ```sh
    go build -o drupal-reminder-bot main.go
+   ```
+   
+   **Option 3: Build with version information:**
+   ```sh
+   VERSION=$(git describe --tags --always --dirty)
+   BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   COMMIT=$(git rev-parse --short HEAD)
+   go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME -X main.commitHash=$COMMIT" -o drupal-reminder-bot main.go
+   ```
+   
+   **Run the bot:**
+   ```sh
    ./drupal-reminder-bot
    ```
 
@@ -52,6 +75,7 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 - `/start` - Start working with the bot
 - `/fetch` - Get website content
 - `/check` - Check the latest article and send notification to all groups
+- `/about` - Show bot version and build information
 
 ## Deployment
 

@@ -35,8 +35,31 @@
    ```
 
 3. **Соберите и запустите бота:**
+   
+   **Вариант 1: Использование скрипта сборки (рекомендуется - автоматически устанавливает версию из git):**
+   ```sh
+   # Linux/macOS
+   ./build.sh
+   
+   # Windows
+   build.bat
+   ```
+   
+   **Вариант 2: Ручная сборка:**
    ```sh
    go build -o drupal-reminder-bot main.go
+   ```
+   
+   **Вариант 3: Сборка с информацией о версии:**
+   ```sh
+   VERSION=$(git describe --tags --always --dirty)
+   BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   COMMIT=$(git rev-parse --short HEAD)
+   go build -ldflags "-X main.version=$VERSION -X main.buildTime=$BUILD_TIME -X main.commitHash=$COMMIT" -o drupal-reminder-bot main.go
+   ```
+   
+   **Запуск бота:**
+   ```sh
    ./drupal-reminder-bot
    ```
 
@@ -52,6 +75,7 @@
 - `/start` - Начать работу с ботом
 - `/fetch` - Получить содержимое сайта
 - `/check` - Проверить последнюю статью и отправить уведомление во все группы
+- `/about` - Показать версию бота и информацию о сборке
 
 ## Деплой
 
