@@ -87,6 +87,41 @@ func truncateToTelegramLimit(text string) string {
 	return text[:telegramMessageLimit-3] + "..."
 }
 
+// Разбивает текст на части, не превышающие лимит Telegram
+func splitToTelegramMessages(text string) []string {
+	if len(text) <= telegramMessageLimit {
+		return []string{text}
+	}
+
+	var messages []string
+	lines := strings.Split(text, "\n")
+	currentMessage := ""
+
+	for _, line := range lines {
+		// Если добавление текущей строки превысит лимит, сохраняем текущее сообщение и начинаем новое
+		if len(currentMessage)+len(line)+1 > telegramMessageLimit {
+			if currentMessage != "" {
+				messages = append(messages, strings.TrimSpace(currentMessage))
+				currentMessage = ""
+			}
+			// Если одна строка слишком длинная, обрезаем её
+			if len(line) > telegramMessageLimit {
+				line = truncateToTelegramLimit(line)
+			}
+		}
+		if currentMessage != "" {
+			currentMessage += "\n"
+		}
+		currentMessage += line
+	}
+
+	if currentMessage != "" {
+		messages = append(messages, strings.TrimSpace(currentMessage))
+	}
+
+	return messages
+}
+
 func resolveURL(baseURL string, pathOrURL string) (string, error) {
 	if strings.HasPrefix(pathOrURL, "http://") || strings.HasPrefix(pathOrURL, "https://") {
 		return pathOrURL, nil
@@ -574,32 +609,23 @@ func (bm *BotManager) handleUpdates() {
 					}
 
 					if len(feed.Channel.Items) == 0 {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "No articles found in RSS feed"))
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "Нет статей в RSS-ленте"))
 						continue
 					}
 
-					// Получаем последнюю статью (первая в списке)
-					lastArticle := feed.Channel.Items[0]
+					// Формируем список всех статей
+					var articlesList strings.Builder
+					articlesList.WriteString("📰 Статьи, доступные только после авторизации:\n\n")
 
-					// Пытаемся получить первый абзац статьи с авторизацией
-					firstParagraph, err := bm.fetchFirstParagraph(lastArticle.Link)
-					var articlePreview string
-					if err != nil {
-						log.Printf("Failed to fetch article content for /check: %v", err)
-						articlePreview = ""
-					} else {
-						articlePreview = "\n\n" + firstParagraph
+					for i, item := range feed.Channel.Items {
+						articlesList.WriteString(fmt.Sprintf("%d. %s\n🔗 %s\n\n", i+1, item.Title, item.Link))
 					}
 
-					// Отправляем уведомление во все чаты
-					bm.sendNotificationToAllChatsWithPreview(lastArticle, articlePreview)
-
-					// Отправляем подтверждение пользователю
-					confirmationMsg := fmt.Sprintf("✅ Уведомление о последней статье отправлено во все группы:\n\n📰 %s\n🔗 %s", lastArticle.Title, lastArticle.Link)
-					if articlePreview != "" {
-						confirmationMsg += articlePreview
+					// Разбиваем на части, если сообщение слишком длинное
+					messages := splitToTelegramMessages(articlesList.String())
+					for _, msg := range messages {
+						bm.bot.Send(tgbotapi.NewMessage(chatID, msg))
 					}
-					bm.bot.Send(tgbotapi.NewMessage(chatID, truncateToTelegramLimit(confirmationMsg)))
 				case "about":
 					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
 						"Версия: %s\n"+
