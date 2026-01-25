@@ -869,6 +869,20 @@ func (bm *BotManager) handleUpdates() {
 				bm.addChat(chatID)
 			}
 
+			// Регистрация группового чата через пересланное сообщение в личку боту.
+			// Это помогает, если бот по каким-то причинам не получает апдейты из группы.
+			if update.Message.Chat.Type == "private" && update.Message.ForwardFromChat != nil {
+				fwdChat := update.Message.ForwardFromChat
+				if fwdChat.Type == "group" || fwdChat.Type == "supergroup" {
+					bm.addChat(fwdChat.ID)
+					reply := fmt.Sprintf(
+						"Группа зарегистрирована.\n\nChat ID: %d\nТип чата: %s\n\nТеперь /check будет рассылать и сюда.",
+						fwdChat.ID, fwdChat.Type,
+					)
+					bm.bot.Send(tgbotapi.NewMessage(chatID, reply))
+				}
+			}
+
 			if update.Message.IsCommand() {
 				switch update.Message.Command() {
 				case "start":
