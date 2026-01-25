@@ -394,7 +394,28 @@ func (bm *BotManager) fetchFirstParagraph(targetURL string) (string, error) {
 	return "", fmt.Errorf("no paragraph found on the page")
 }
 
-// Извлечение изображения из og:image мета-тега
+// Вспомогательная функция для преобразования относительного URL в абсолютный
+func resolveImageURL(baseURL string, imageURL string) string {
+	if imageURL == "" {
+		return ""
+	}
+	// Если URL уже абсолютный, возвращаем как есть
+	if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		return imageURL
+	}
+	// Преобразуем относительный URL в абсолютный
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return imageURL
+	}
+	relative, err := url.Parse(imageURL)
+	if err != nil {
+		return imageURL
+	}
+	return base.ResolveReference(relative).String()
+}
+
+// Извлечение заглавного изображения статьи из структуры Drupal
 func (bm *BotManager) fetchArticleImage(targetURL string) (string, error) {
 	req, err := bm.newRequest("GET", targetURL, nil)
 	if err != nil {
@@ -419,25 +440,81 @@ func (bm *BotManager) fetchArticleImage(targetURL string) (string, error) {
 		return "", fmt.Errorf("failed to parse HTML: %w", err)
 	}
 
-	// Ищем мета-тег og:image
-	ogImage := doc.Find("meta[property='og:image']").First()
-	if ogImage.Length() > 0 {
-		if imageURL, exists := ogImage.Attr("content"); exists && imageURL != "" {
-			// Если URL относительный, преобразуем его в абсолютный
-			if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
-				baseURL, err := url.Parse(targetURL)
-				if err == nil {
-					relativeURL, err := url.Parse(imageURL)
-					if err == nil {
-						absoluteURL := baseURL.ResolveReference(relativeURL)
-						return absoluteURL.String(), nil
-					}
-				}
+	var imageURL string
+	var source string
+
+	// 1. Поиск в поле изображения Drupal (field-image, field-featured-image)
+	selectors := []string{
+		"div.field-name-field-image img",
+		"div.field-name-field-featured-image img",
+		"div[class*='field-image'] img",
+		"div[class*='field-featured-image'] img",
+		"img[data-field-name*='image']",
+		"img[data-field-name*='featured']",
+	}
+
+	for _, selector := range selectors {
+		img := doc.Find(selector).First()
+		if img.Length() > 0 {
+			if src, exists := img.Attr("src"); exists && src != "" {
+				imageURL = resolveImageURL(targetURL, src)
+				source = "Drupal field"
+				log.Printf("Found image in Drupal field structure: %s", imageURL)
+				break
 			}
-			return imageURL, nil
 		}
 	}
 
+	// 2. Если не найдено, ищем первое изображение в основном контенте статьи
+	if imageURL == "" {
+		contentSelectors := []string{
+			"article img",
+			"main img",
+			".node-content img",
+			".field-body img",
+			".content img",
+		}
+
+		for _, selector := range contentSelectors {
+			img := doc.Find(selector).First()
+			if img.Length() > 0 {
+				// Пропускаем маленькие изображения (иконки, аватары) по классу
+				if class, _ := img.Attr("class"); strings.Contains(strings.ToLower(class), "icon") || strings.Contains(strings.ToLower(class), "avatar") {
+					continue
+				}
+				// Пропускаем изображения с маленькими размерами в src (обычно иконки)
+				if src, exists := img.Attr("src"); exists && src != "" {
+					// Пропускаем data: URL и очень маленькие изображения
+					if strings.HasPrefix(src, "data:") {
+						continue
+					}
+					imageURL = resolveImageURL(targetURL, src)
+					source = "article content"
+					log.Printf("Found image in article content: %s", imageURL)
+					break
+				}
+			}
+		}
+	}
+
+	// 3. Fallback: ищем мета-тег og:image
+	if imageURL == "" {
+		ogImage := doc.Find("meta[property='og:image']").First()
+		if ogImage.Length() > 0 {
+			if content, exists := ogImage.Attr("content"); exists && content != "" {
+				imageURL = resolveImageURL(targetURL, content)
+				source = "og:image"
+				log.Printf("Found image in og:image meta tag: %s", imageURL)
+			}
+		}
+	}
+
+	if imageURL != "" {
+		log.Printf("✅ Image found from %s: %s", source, imageURL)
+		return imageURL, nil
+	}
+
+	log.Printf("⚠️  No image found for article: %s", targetURL)
 	return "", nil // Возвращаем пустую строку, если изображение не найдено
 }
 
