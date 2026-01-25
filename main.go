@@ -148,6 +148,7 @@ func (bm *BotManager) newRequest(method string, targetURL string, body io.Reader
 
 	if bm.authMethod == "basic" && bm.rssAuthUser != "" && bm.rssAuthPassword != "" {
 		req.SetBasicAuth(bm.rssAuthUser, bm.rssAuthPassword)
+		log.Printf("Using Basic Auth for request to: %s", targetURL)
 	}
 
 	return req, nil
@@ -182,11 +183,13 @@ func loginToDrupal(client *http.Client, rssURL string, loginURL string, username
 		return fmt.Errorf("DRUPAL_AUTH_METHOD=cookie requires RSS_AUTH_USER and RSS_AUTH_PASSWORD")
 	}
 
+	log.Printf("Attempting to login to Drupal at %s (login URL: %s)", rssURL, loginURL)
 	loginPageURL, err := resolveURL(rssURL, loginURL)
 	if err != nil {
 		return err
 	}
 
+	log.Printf("Loading login page: %s", loginPageURL)
 	resp, err := client.Get(loginPageURL)
 	if err != nil {
 		return fmt.Errorf("failed to load login page: %w", err)
@@ -194,8 +197,10 @@ func loginToDrupal(client *http.Client, rssURL string, loginURL string, username
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("⚠️  Login page returned status: %d", resp.StatusCode)
 		return fmt.Errorf("login page returned status: %d", resp.StatusCode)
 	}
+	log.Printf("✅ Login page loaded successfully")
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
@@ -243,6 +248,7 @@ func loginToDrupal(client *http.Client, rssURL string, loginURL string, username
 		values.Set("op", "Log in")
 	}
 
+	log.Printf("Submitting login form to: %s", actionURL)
 	req, err := http.NewRequest("POST", actionURL, strings.NewReader(values.Encode()))
 	if err != nil {
 		return fmt.Errorf("failed to create login request: %w", err)
@@ -251,6 +257,7 @@ func loginToDrupal(client *http.Client, rssURL string, loginURL string, username
 
 	postResp, err := client.Do(req)
 	if err != nil {
+		log.Printf("❌ Failed to submit login form: %v", err)
 		return fmt.Errorf("failed to submit login form: %w", err)
 	}
 	defer postResp.Body.Close()
@@ -259,12 +266,51 @@ func loginToDrupal(client *http.Client, rssURL string, loginURL string, username
 	bodyText := string(bodyBytes)
 
 	if postResp.StatusCode >= http.StatusBadRequest {
+		log.Printf("❌ Login failed with status: %d", postResp.StatusCode)
 		return fmt.Errorf("login failed with status: %d", postResp.StatusCode)
 	}
 
 	if strings.Contains(bodyText, "user-login-form") && strings.Contains(postResp.Request.URL.Path, "user/login") {
+		log.Printf("❌ Login failed: login form still present, check username/password")
 		return fmt.Errorf("login failed: check username/password")
 	}
+
+	log.Printf("✅ Login successful")
+	return nil
+}
+
+// Перелогинивание при истечении сессии (для метода cookie)
+func (bm *BotManager) renewAuth() error {
+	if bm.authMethod != "cookie" {
+		return nil // Для basic auth перелогинивание не требуется
+	}
+
+	if bm.rssAuthUser == "" || bm.rssAuthPassword == "" {
+		return fmt.Errorf("RSS_AUTH_USER and RSS_AUTH_PASSWORD required for cookie auth renewal")
+	}
+
+	log.Printf("Renewing authentication (cookie method)...")
+
+	// Создаем новый cookie jar
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("failed to create cookie jar: %w", err)
+	}
+
+	// Создаем новый клиент с новым cookie jar
+	newClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Jar:     jar,
+	}
+
+	// Выполняем логин
+	if err := loginToDrupal(newClient, bm.rssURL, bm.loginURL, bm.rssAuthUser, bm.rssAuthPassword); err != nil {
+		return fmt.Errorf("failed to renew auth: %w", err)
+	}
+
+	// Обновляем httpClient
+	bm.httpClient = newClient
+	log.Printf("✅ Authentication renewed successfully")
 
 	return nil
 }
@@ -376,6 +422,37 @@ func (bm *BotManager) fetchRSSFeed() (*RSSFeed, error) {
 	}
 	defer resp.Body.Close()
 
+	// Проверяем ошибки авторизации
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		log.Printf("⚠️  Authentication failed (status: %d), attempting to renew auth...", resp.StatusCode)
+		
+		// Пытаемся перелогиниться (только для метода cookie)
+		if bm.authMethod == "cookie" {
+			if err := bm.renewAuth(); err != nil {
+				return nil, fmt.Errorf("authentication failed and renewal failed: %w", err)
+			}
+			
+			// Повторяем запрос после перелогинивания
+			req, err := bm.newRequest("GET", bm.rssURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create request after auth renewal: %w", err)
+			}
+			
+			resp, err = bm.httpClient.Do(req)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch RSS after auth renewal: %w", err)
+			}
+			defer resp.Body.Close()
+			
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("authentication still failing after renewal (status: %d)", resp.StatusCode)
+			}
+		} else {
+			// Для basic auth просто возвращаем ошибку
+			return nil, fmt.Errorf("authentication failed (status: %d). Check your credentials", resp.StatusCode)
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -386,6 +463,7 @@ func (bm *BotManager) fetchRSSFeed() (*RSSFeed, error) {
 		return nil, fmt.Errorf("failed to parse RSS: %w", err)
 	}
 
+	log.Printf("✅ Successfully fetched RSS feed: %d articles found", len(feed.Channel.Items))
 	return &feed, nil
 }
 
@@ -602,13 +680,21 @@ func (bm *BotManager) handleUpdates() {
 					truncatedContent := truncateToTelegramLimit(content)
 					bm.bot.Send(tgbotapi.NewMessage(chatID, truncatedContent))
 				case "check":
+					log.Printf("Command /check received from chat %d", chatID)
+					log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
+					
 					feed, err := bm.fetchRSSFeed()
 					if err != nil {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch RSS feed: "+err.Error()))
+						log.Printf("❌ Failed to fetch RSS feed: %v", err)
+						errorMsg := fmt.Sprintf("❌ Ошибка при получении RSS-ленты: %s", err.Error())
+						bm.bot.Send(tgbotapi.NewMessage(chatID, errorMsg))
 						continue
 					}
 
+					log.Printf("✅ RSS feed fetched successfully: %d articles found", len(feed.Channel.Items))
+
 					if len(feed.Channel.Items) == 0 {
+						log.Printf("⚠️  No articles found in RSS feed")
 						bm.bot.Send(tgbotapi.NewMessage(chatID, "Нет статей в RSS-ленте"))
 						continue
 					}
@@ -621,10 +707,16 @@ func (bm *BotManager) handleUpdates() {
 						articlesList.WriteString(fmt.Sprintf("%d. %s\n🔗 %s\n\n", i+1, item.Title, item.Link))
 					}
 
+					log.Printf("Sending %d articles to chat %d", len(feed.Channel.Items), chatID)
+
 					// Разбиваем на части, если сообщение слишком длинное
 					messages := splitToTelegramMessages(articlesList.String())
-					for _, msg := range messages {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, msg))
+					for i, msg := range messages {
+						if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, msg)); err != nil {
+							log.Printf("❌ Failed to send message part %d/%d to chat %d: %v", i+1, len(messages), chatID, err)
+						} else {
+							log.Printf("✅ Sent message part %d/%d to chat %d", i+1, len(messages), chatID)
+						}
 					}
 				case "about":
 					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
