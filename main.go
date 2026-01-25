@@ -797,7 +797,11 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 			msg.ParseMode = "HTML"
 			if _, msgErr := bm.bot.Send(msg); msgErr != nil {
 				log.Printf("❌ Failed to send fallback text message to chat %d: %v", chatID, msgErr)
+			} else {
+				log.Printf("✅ Sent fallback text message to chat %d", chatID)
 			}
+		} else {
+			log.Printf("✅ Sent photo to chat %d", chatID)
 		}
 		return
 	}
@@ -808,6 +812,8 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 	msg.ParseMode = "HTML"
 	if _, err := bm.bot.Send(msg); err != nil {
 		log.Printf("❌ Failed to send text message to chat %d: %v", chatID, err)
+	} else {
+		log.Printf("✅ Sent text message to chat %d", chatID)
 	}
 }
 
@@ -867,7 +873,10 @@ func (bm *BotManager) handleUpdates() {
 				switch update.Message.Command() {
 				case "start":
 					bm.addChat(chatID)
-					msg := tgbotapi.NewMessage(chatID, "Привет! Я бот для уведомлений о новых статьях на сайте Дениса Морозова.")
+					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
+						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /about, /status",
+						chatID, update.Message.Chat.Type,
+					))
 					bm.bot.Send(msg)
 				case "fetch":
 					url := os.Getenv("DRUPAL_SITE_URL")
@@ -929,9 +938,22 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
+					log.Printf("Broadcasting /check to %d chats: %v", len(allChatIDs), allChatIDs)
 					for _, targetChatID := range allChatIDs {
 						bm.sendLastArticleToChat(targetChatID, item, imageURL)
 					}
+				case "status":
+					isRegistered := false
+					bm.chatsMu.RLock()
+					isRegistered = bm.chats[chatID]
+					totalChats := len(bm.chats)
+					bm.chatsMu.RUnlock()
+
+					text := fmt.Sprintf(
+						"Статус\n\nChat ID: %d\nТип чата: %s\nЗарегистрирован: %t\nВсего чатов в базе: %d",
+						chatID, update.Message.Chat.Type, isRegistered, totalChats,
+					)
+					bm.bot.Send(tgbotapi.NewMessage(chatID, text))
 				case "about":
 					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
 						"Версия: %s\n"+
