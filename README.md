@@ -67,8 +67,9 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 - The bot will monitor the Drupal site specified in `DRUPAL_SITE_URL`
 - The bot will send notifications to the Telegram group chat where it is added
 - Default RSS URL: `https://www.dennismorosoff.ru/rss.xml`
-- `DRUPAL_AUTH_METHOD=basic` uses HTTP Basic Auth when fetching RSS
-- `DRUPAL_AUTH_METHOD=cookie` logs in via `DRUPAL_LOGIN_URL` and uses session cookies
+- `DRUPAL_AUTH_METHOD=basic` uses HTTP Basic Auth when fetching RSS (relevant if Basic Auth is enforced by your server/proxy)
+- `DRUPAL_AUTH_METHOD=cookie` logs in via `DRUPAL_LOGIN_URL` and uses session cookies (needed when content is restricted by Drupal login only)
+- If `DRUPAL_AUTH_METHOD` is not set but `RSS_AUTH_USER`/`RSS_AUTH_PASSWORD` are set, the bot defaults to `cookie`
 - For private articles, ensure the authenticated user role can access the RSS View
 
 ### Bot Commands

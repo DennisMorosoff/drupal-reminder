@@ -65,6 +65,7 @@ type State struct {
 type BotManager struct {
 	bot              *tgbotapi.BotAPI
 	rssURL           string
+	rssBaseURL       string
 	rssAuthUser      string
 	rssAuthPassword  string
 	authMethod       string
@@ -154,7 +155,19 @@ func (bm *BotManager) newRequest(method string, targetURL string, body io.Reader
 	return req, nil
 }
 
-func initAuthClient(rssURL string, authMethod string, loginURL string, username string, password string) (*http.Client, error) {
+func baseOriginFromURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse URL %q: %w", rawURL, err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("URL must include scheme and host, got: %q", rawURL)
+	}
+	origin := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String()
+	return origin, nil
+}
+
+func initAuthClient(rssURL string, rssBaseURL string, authMethod string, loginURL string, username string, password string) (*http.Client, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
@@ -169,7 +182,10 @@ func initAuthClient(rssURL string, authMethod string, loginURL string, username 
 		}
 		client.Jar = jar
 
-		if err := loginToDrupal(client, rssURL, loginURL, username, password); err != nil {
+		if strings.TrimSpace(rssBaseURL) == "" {
+			return nil, fmt.Errorf("DRUPAL_AUTH_METHOD=cookie requires a valid base URL derived from RSS_URL")
+		}
+		if err := loginToDrupal(client, rssBaseURL, loginURL, username, password); err != nil {
 			return nil, err
 		}
 		return client, nil
@@ -178,13 +194,13 @@ func initAuthClient(rssURL string, authMethod string, loginURL string, username 
 	}
 }
 
-func loginToDrupal(client *http.Client, rssURL string, loginURL string, username string, password string) error {
+func loginToDrupal(client *http.Client, baseURL string, loginURL string, username string, password string) error {
 	if username == "" || password == "" {
 		return fmt.Errorf("DRUPAL_AUTH_METHOD=cookie requires RSS_AUTH_USER and RSS_AUTH_PASSWORD")
 	}
 
-	log.Printf("Attempting to login to Drupal at %s (login URL: %s)", rssURL, loginURL)
-	loginPageURL, err := resolveURL(rssURL, loginURL)
+	log.Printf("Attempting to login to Drupal at %s (login URL: %s)", baseURL, loginURL)
+	loginPageURL, err := resolveURL(baseURL, loginURL)
 	if err != nil {
 		return err
 	}
@@ -304,7 +320,7 @@ func (bm *BotManager) renewAuth() error {
 	}
 
 	// Выполняем логин
-	if err := loginToDrupal(newClient, bm.rssURL, bm.loginURL, bm.rssAuthUser, bm.rssAuthPassword); err != nil {
+	if err := loginToDrupal(newClient, bm.rssBaseURL, bm.loginURL, bm.rssAuthUser, bm.rssAuthPassword); err != nil {
 		return fmt.Errorf("failed to renew auth: %w", err)
 	}
 
@@ -779,18 +795,40 @@ func main() {
 		log.Printf("RSS_AUTH_USER is not set (RSS feed may be public)")
 	}
 
-	authMethod := strings.ToLower(strings.TrimSpace(os.Getenv("DRUPAL_AUTH_METHOD")))
+	rawAuthMethod := strings.TrimSpace(os.Getenv("DRUPAL_AUTH_METHOD"))
+	authMethod := strings.ToLower(rawAuthMethod)
+	authMethodSource := "env"
 	if authMethod == "" {
-		authMethod = "basic"
+		// Если креды заданы, вероятнее всего нужен cookie-логин (Drupal-only).
+		if rssAuthUser != "" && rssAuthPassword != "" {
+			authMethod = "cookie"
+			authMethodSource = "default(cookie_due_to_credentials)"
+		} else {
+			authMethod = "basic"
+			authMethodSource = "default(basic)"
+			if (rssAuthUser != "" && rssAuthPassword == "") || (rssAuthUser == "" && rssAuthPassword != "") {
+				log.Printf("⚠️  Only one of RSS_AUTH_USER/RSS_AUTH_PASSWORD is set; defaulting to basic auth")
+			}
+		}
 	}
 	loginURL := strings.TrimSpace(os.Getenv("DRUPAL_LOGIN_URL"))
 	if loginURL == "" {
 		loginURL = "/user/login"
 	}
-	log.Printf("✅ DRUPAL_AUTH_METHOD: %s", authMethod)
+	log.Printf("✅ DRUPAL_AUTH_METHOD: %s (source: %s)", authMethod, authMethodSource)
 	log.Printf("✅ DRUPAL_LOGIN_URL: %s", loginURL)
 
-	authClient, err := initAuthClient(rssURL, authMethod, loginURL, rssAuthUser, rssAuthPassword)
+	rssBaseURL := ""
+	if authMethod == "cookie" {
+		var err error
+		rssBaseURL, err = baseOriginFromURL(rssURL)
+		if err != nil {
+			log.Fatalf("❌ ERROR: Failed to derive base URL from RSS_URL: %v", err)
+		}
+		log.Printf("✅ Derived base URL for cookie login: %s", rssBaseURL)
+	}
+
+	authClient, err := initAuthClient(rssURL, rssBaseURL, authMethod, loginURL, rssAuthUser, rssAuthPassword)
 	if err != nil {
 		log.Fatalf("❌ ERROR: Failed to init auth client: %v", err)
 	}
@@ -840,6 +878,7 @@ func main() {
 	bm := &BotManager{
 		bot:              bot,
 		rssURL:           rssURL,
+		rssBaseURL:       rssBaseURL,
 		rssAuthUser:      rssAuthUser,
 		rssAuthPassword:  rssAuthPassword,
 		authMethod:       authMethod,

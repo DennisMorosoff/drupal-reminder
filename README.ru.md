@@ -67,8 +67,9 @@
 - Бот будет отслеживать сайт Drupal, указанный в `DRUPAL_SITE_URL`
 - Бот будет отправлять уведомления в групповой чат Telegram, куда он добавлен
 - RSS URL по умолчанию: `https://www.dennismorosoff.ru/rss.xml`
-- `DRUPAL_AUTH_METHOD=basic` использует HTTP Basic Auth при запросе RSS
-- `DRUPAL_AUTH_METHOD=cookie` логинится в Drupal через `DRUPAL_LOGIN_URL` и использует сессионные cookies
+- `DRUPAL_AUTH_METHOD=basic` использует HTTP Basic Auth при запросе RSS (актуально, если у вас включена Basic Auth на уровне сервера/прокси)
+- `DRUPAL_AUTH_METHOD=cookie` логинится в Drupal через `DRUPAL_LOGIN_URL` и использует сессионные cookies (нужно, если доступ к материалам ограничен только Drupal-авторизацией)
+- Если `DRUPAL_AUTH_METHOD` не задан, но заданы `RSS_AUTH_USER`/`RSS_AUTH_PASSWORD`, бот по умолчанию использует `cookie`
 - Для закрытых статей убедитесь, что роль авторизованного пользователя имеет доступ к RSS View
 
 ### Команды бота
