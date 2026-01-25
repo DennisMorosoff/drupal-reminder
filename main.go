@@ -806,6 +806,7 @@ func (bm *BotManager) sendNotificationToAllChatsWithPreview(item RSSItem, previe
 }
 
 func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL string) {
+	log.Printf("DEBUG: sendLastArticleToChat called for chat %d, imageURL length: %d", chatID, len(imageURL))
 	if imageURL != "" {
 		caption := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
 		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
@@ -972,9 +973,13 @@ func (bm *BotManager) handleUpdates() {
 
 					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
 					// Всегда отправляем статью в текущий чат
+					log.Printf("DEBUG: Before addChat for chat %d", chatID)
 					bm.addChat(chatID)
+					log.Printf("DEBUG: After addChat for chat %d", chatID)
 					log.Printf("Sending article to current chat %d: %s", chatID, item.Title)
+					log.Printf("DEBUG: Before sendLastArticleToChat for chat %d", chatID)
 					bm.sendLastArticleToChat(chatID, item, imageURL)
+					log.Printf("DEBUG: After sendLastArticleToChat for chat %d", chatID)
 
 					// Поведение /check:
 					// - в личке: дополнительно разослать во все известные чаты (кроме текущего)
