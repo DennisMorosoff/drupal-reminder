@@ -580,26 +580,44 @@ func loadState(filename string) (*State, error) {
 		return nil, err
 	}
 
+	// Инициализируем ChatIDs, если оно nil (для старых версий state.json)
+	if state.ChatIDs == nil {
+		state.ChatIDs = []int64{}
+	}
+
 	return &state, nil
 }
 
 // Сохранение состояния в файл
 func saveState(filename string, state *State) error {
 	log.Printf("DEBUG: saveState started for file: %s", filename)
+	log.Printf("DEBUG: saveState: saving %d chat IDs: %v", len(state.ChatIDs), state.ChatIDs)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		log.Printf("DEBUG: saveState: json.MarshalIndent failed: %v", err)
 		return err
 	}
 	log.Printf("DEBUG: saveState: json.MarshalIndent completed, data size: %d bytes", len(data))
+	log.Printf("DEBUG: saveState: JSON content preview (first 500 chars): %s", string(data[:min(500, len(data))]))
 
 	err = os.WriteFile(filename, data, 0644)
 	if err != nil {
 		log.Printf("DEBUG: saveState: os.WriteFile failed: %v", err)
 	} else {
 		log.Printf("DEBUG: saveState: os.WriteFile completed successfully")
+		// Проверяем, что файл действительно записан
+		if fileInfo, statErr := os.Stat(filename); statErr == nil {
+			log.Printf("DEBUG: saveState: file written, size: %d bytes, mod time: %v", fileInfo.Size(), fileInfo.ModTime())
+		}
 	}
 	return err
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Получение RSS с HTTP Basic Auth
@@ -906,16 +924,14 @@ func (bm *BotManager) addChat(chatID int64) {
 
 	if isNew {
 		log.Printf("Chat %d added to notification list", chatID)
-		// Сохраняем состояние асинхронно, чтобы не блокировать выполнение команды
-		go func() {
-			log.Printf("DEBUG: Before persistState in addChat (async) for chat %d", chatID)
-			if err := bm.persistState(); err != nil {
-				log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
-			} else {
-				log.Printf("DEBUG: persistState completed successfully (async) for chat %d", chatID)
-			}
-		}()
-		log.Printf("DEBUG: After scheduling persistState (async) for chat %d", chatID)
+		// Сохраняем состояние синхронно, чтобы гарантировать сохранение
+		log.Printf("DEBUG: Before persistState in addChat for chat %d", chatID)
+		if err := bm.persistState(); err != nil {
+			log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
+		} else {
+			log.Printf("DEBUG: persistState completed successfully for chat %d", chatID)
+		}
+		log.Printf("DEBUG: After persistState for chat %d", chatID)
 	} else {
 		log.Printf("DEBUG: Chat %d already exists, skipping persistState", chatID)
 	}
@@ -979,6 +995,13 @@ func (bm *BotManager) handleUpdates() {
 					// Явная регистрация текущего чата для уведомлений
 					if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
 						bm.addChat(chatID)
+						// Принудительно сохраняем состояние после команды /add
+						log.Printf("DEBUG: /add command: forcing state save for chat %d", chatID)
+						if err := bm.persistState(); err != nil {
+							log.Printf("ERROR: Failed to save state after /add command: %v", err)
+						} else {
+							log.Printf("DEBUG: /add command: state saved successfully")
+						}
 						reply := fmt.Sprintf(
 							"✅ Чат зарегистрирован для уведомлений.\n\nChat ID: %d\nТип чата: %s",
 							chatID, update.Message.Chat.Type,
@@ -990,7 +1013,7 @@ func (bm *BotManager) handleUpdates() {
 				case "start":
 					bm.addChat(chatID)
 					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /add, /check, /about, /status",
+						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /add, /check, /release, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
 					bm.bot.Send(msg)
@@ -1109,6 +1132,9 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
+					// Регистрируем личный чат, если еще не зарегистрирован
+					bm.addChat(chatID)
+
 					// Извлечение текста после команды
 					// Сначала пробуем CommandArguments (работает с ботнеймами)
 					releaseText := strings.TrimSpace(update.Message.CommandArguments())
@@ -1139,7 +1165,7 @@ func (bm *BotManager) handleUpdates() {
 					bm.chatsMu.RUnlock()
 					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Релиз отправлен в %d чат(ов)", totalChats)))
 				default:
-					msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Попробуйте /start, /add, /fetch, /check, /status или /about")
+					msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Попробуйте /start, /add, /fetch, /check, /release, /status или /about")
 					bm.bot.Send(msg)
 				}
 			} else if update.Message.Text != "" {
@@ -1277,6 +1303,7 @@ func main() {
 	for _, chatID := range state.ChatIDs {
 		chats[chatID] = true
 	}
+	log.Printf("✅ Loaded %d chats from state: %v", len(chats), state.ChatIDs)
 
 	bm := &BotManager{
 		bot:              bot,
