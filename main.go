@@ -962,39 +962,45 @@ func (bm *BotManager) handleUpdates() {
 					imageURL, err := bm.fetchArticleImage(item.Link)
 					if err != nil {
 						log.Printf("⚠️  Failed to fetch article image: %v", err)
+						imageURL = "" // Убеждаемся, что imageURL пустая при ошибке
+					}
+					if imageURL != "" {
+						log.Printf("✅ Article image found: %s", imageURL)
+					} else {
+						log.Printf("ℹ️  No article image, will send text message")
 					}
 
+					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
+					// Всегда отправляем статью в текущий чат
+					bm.addChat(chatID)
+					log.Printf("Sending article to current chat %d: %s", chatID, item.Title)
+					bm.sendLastArticleToChat(chatID, item, imageURL)
+
 					// Поведение /check:
-					// - в личке: показать статью в личке и разослать во все известные чаты
-					// - в группе: показать статью только в этой группе (без общей рассылки)
+					// - в личке: дополнительно разослать во все известные чаты (кроме текущего)
+					// - в группе: только в текущей группе (без общей рассылки)
 					if update.Message.Chat.Type != "private" {
 						// Для групп/супергрупп не делаем broadcast
-						bm.addChat(chatID)
-						bm.sendLastArticleToChat(chatID, item, imageURL)
 						continue
 					}
 
-					// Личка: включаем этот чат в базу и делаем рассылку по всем известным чатам
-					bm.addChat(chatID)
-
+					// Личка: делаем рассылку по всем известным чатам (кроме текущего)
 					bm.chatsMu.RLock()
 					allChatIDs := make([]int64, 0, len(bm.chats))
 					for id := range bm.chats {
-						allChatIDs = append(allChatIDs, id)
+						if id != chatID { // Исключаем текущий чат, так как уже отправили
+							allChatIDs = append(allChatIDs, id)
+						}
 					}
 					bm.chatsMu.RUnlock()
 
-					// ВАЖНО: последняя статья выводится в любом случае, даже если нет других зарегистрированных чатов
-					// Отправляем хотя бы в текущий чат
-					if len(allChatIDs) == 0 {
-						log.Printf("No chats registered, sending article to current chat only: %s", item.Title)
-						bm.sendLastArticleToChat(chatID, item, imageURL)
-						continue
-					}
-
-					log.Printf("Broadcasting /check (private) to %d chats: %v", len(allChatIDs), allChatIDs)
-					for _, targetChatID := range allChatIDs {
-						bm.sendLastArticleToChat(targetChatID, item, imageURL)
+					if len(allChatIDs) > 0 {
+						log.Printf("Broadcasting /check (private) to %d additional chats: %v", len(allChatIDs), allChatIDs)
+						for _, targetChatID := range allChatIDs {
+							bm.sendLastArticleToChat(targetChatID, item, imageURL)
+						}
+					} else {
+						log.Printf("No additional chats to broadcast to")
 					}
 				case "status":
 					isRegistered := false
