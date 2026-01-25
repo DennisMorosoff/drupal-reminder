@@ -394,6 +394,53 @@ func (bm *BotManager) fetchFirstParagraph(targetURL string) (string, error) {
 	return "", fmt.Errorf("no paragraph found on the page")
 }
 
+// Извлечение изображения из og:image мета-тега
+func (bm *BotManager) fetchArticleImage(targetURL string) (string, error) {
+	req, err := bm.newRequest("GET", targetURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	httpResp, err := bm.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch URL: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		if httpResp.StatusCode == http.StatusUnauthorized || httpResp.StatusCode == http.StatusForbidden {
+			return "", fmt.Errorf("authentication failed (status code: %d). Check your credentials", httpResp.StatusCode)
+		}
+		return "", fmt.Errorf("unexpected status code: %d", httpResp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(httpResp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	// Ищем мета-тег og:image
+	ogImage := doc.Find("meta[property='og:image']").First()
+	if ogImage.Length() > 0 {
+		if imageURL, exists := ogImage.Attr("content"); exists && imageURL != "" {
+			// Если URL относительный, преобразуем его в абсолютный
+			if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+				baseURL, err := url.Parse(targetURL)
+				if err == nil {
+					relativeURL, err := url.Parse(imageURL)
+					if err == nil {
+						absoluteURL := baseURL.ResolveReference(relativeURL)
+						return absoluteURL.String(), nil
+					}
+				}
+			}
+			return imageURL, nil
+		}
+	}
+
+	return "", nil // Возвращаем пустую строку, если изображение не найдено
+}
+
 // Загрузка состояния из файла
 func loadState(filename string) (*State, error) {
 	data, err := os.ReadFile(filename)
@@ -715,23 +762,42 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
-					// Формируем список всех статей
-					var articlesList strings.Builder
-					articlesList.WriteString("📰 Статьи, доступные только после авторизации:\n\n")
+					// Берем только последнюю (первую в списке) статью
+					item := feed.Channel.Items[0]
+					log.Printf("Processing last article: %s", item.Title)
 
-					for i, item := range feed.Channel.Items {
-						articlesList.WriteString(fmt.Sprintf("%d. %s\n🔗 %s\n\n", i+1, item.Title, item.Link))
+					// Пытаемся получить изображение статьи
+					imageURL, err := bm.fetchArticleImage(item.Link)
+					if err != nil {
+						log.Printf("⚠️  Failed to fetch article image: %v", err)
 					}
 
-					log.Printf("Sending %d articles to chat %d", len(feed.Channel.Items), chatID)
+					if imageURL != "" {
+						// Отправляем фото с подписью-ссылкой
+						caption := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+						photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
+						photo.Caption = caption
+						photo.ParseMode = "HTML"
 
-					// Разбиваем на части, если сообщение слишком длинное
-					messages := splitToTelegramMessages(articlesList.String())
-					for i, msg := range messages {
-						if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, msg)); err != nil {
-							log.Printf("❌ Failed to send message part %d/%d to chat %d: %v", i+1, len(messages), chatID, err)
+						if _, err := bm.bot.Send(photo); err != nil {
+							log.Printf("❌ Failed to send photo to chat %d: %v", chatID, err)
+							// Fallback: отправляем текстовое сообщение
+							textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+							msg := tgbotapi.NewMessage(chatID, textMsg)
+							msg.ParseMode = "HTML"
+							bm.bot.Send(msg)
 						} else {
-							log.Printf("✅ Sent message part %d/%d to chat %d", i+1, len(messages), chatID)
+							log.Printf("✅ Sent photo with article to chat %d", chatID)
+						}
+					} else {
+						// Изображение не найдено, отправляем текстовое сообщение с ссылкой
+						textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+						msg := tgbotapi.NewMessage(chatID, textMsg)
+						msg.ParseMode = "HTML"
+						if _, err := bm.bot.Send(msg); err != nil {
+							log.Printf("❌ Failed to send text message to chat %d: %v", chatID, err)
+						} else {
+							log.Printf("✅ Sent text message with article link to chat %d", chatID)
 						}
 					}
 				case "about":
