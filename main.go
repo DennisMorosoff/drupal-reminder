@@ -873,13 +873,16 @@ func (bm *BotManager) addChat(chatID int64) {
 
 	if isNew {
 		log.Printf("Chat %d added to notification list", chatID)
-		log.Printf("DEBUG: Before persistState in addChat for chat %d", chatID)
-		if err := bm.persistState(); err != nil {
-			log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
-		} else {
-			log.Printf("DEBUG: persistState completed successfully for chat %d", chatID)
-		}
-		log.Printf("DEBUG: After persistState in addChat for chat %d", chatID)
+		// Сохраняем состояние асинхронно, чтобы не блокировать выполнение команды
+		go func() {
+			log.Printf("DEBUG: Before persistState in addChat (async) for chat %d", chatID)
+			if err := bm.persistState(); err != nil {
+				log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
+			} else {
+				log.Printf("DEBUG: persistState completed successfully (async) for chat %d", chatID)
+			}
+		}()
+		log.Printf("DEBUG: After scheduling persistState (async) for chat %d", chatID)
 	} else {
 		log.Printf("DEBUG: Chat %d already exists, skipping persistState", chatID)
 	}
