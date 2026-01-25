@@ -942,10 +942,22 @@ func (bm *BotManager) handleUpdates() {
 
 			if update.Message.IsCommand() {
 				switch update.Message.Command() {
+				case "add":
+					// Явная регистрация текущего чата для уведомлений
+					if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
+						bm.addChat(chatID)
+						reply := fmt.Sprintf(
+							"✅ Чат зарегистрирован для уведомлений.\n\nChat ID: %d\nТип чата: %s",
+							chatID, update.Message.Chat.Type,
+						)
+						bm.bot.Send(tgbotapi.NewMessage(chatID, reply))
+					} else {
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "Команда /add работает только в группе/супергруппе. Добавьте бота в группу и выполните /add там."))
+					}
 				case "start":
 					bm.addChat(chatID)
 					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /about, /status",
+						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /add, /check, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
 					bm.bot.Send(msg)
@@ -1058,7 +1070,7 @@ func (bm *BotManager) handleUpdates() {
 					msg := tgbotapi.NewMessage(chatID, versionInfo)
 					bm.bot.Send(msg)
 				default:
-					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch, /check or /about")
+					msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Попробуйте /start, /add, /fetch, /check, /status или /about")
 					bm.bot.Send(msg)
 				}
 			} else if update.Message.Text != "" {

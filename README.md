@@ -74,6 +74,7 @@ This bot is designed to be added to Telegram group chats. It monitors a Drupal s
 
 ### Bot Commands
 - `/start` - Start working with the bot
+- `/add` - Register the current group for notifications
 - `/fetch` - Get website content
 - `/check` - Check the latest article and send notification to all groups
 - `/about` - Show bot version and build information
