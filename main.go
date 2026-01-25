@@ -954,8 +954,9 @@ func (bm *BotManager) handleUpdates() {
 					}
 
 					// Берем только последнюю (первую в списке) статью
+					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
 					item := feed.Channel.Items[0]
-					log.Printf("Processing last article: %s", item.Title)
+					log.Printf("Processing last article: %s (will be sent regardless of notification status)", item.Title)
 
 					// Пытаемся получить изображение статьи
 					imageURL, err := bm.fetchArticleImage(item.Link)
@@ -983,8 +984,11 @@ func (bm *BotManager) handleUpdates() {
 					}
 					bm.chatsMu.RUnlock()
 
+					// ВАЖНО: последняя статья выводится в любом случае, даже если нет других зарегистрированных чатов
+					// Отправляем хотя бы в текущий чат
 					if len(allChatIDs) == 0 {
-						log.Printf("No chats registered, skipping /check broadcast for article: %s", item.Title)
+						log.Printf("No chats registered, sending article to current chat only: %s", item.Title)
+						bm.sendLastArticleToChat(chatID, item, imageURL)
 						continue
 					}
 
