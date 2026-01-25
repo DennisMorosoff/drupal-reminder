@@ -59,6 +59,7 @@ type RSSItem struct {
 type State struct {
 	LastCheckedArticles []string `json:"last_checked_articles"`
 	LastCheckTime       string   `json:"last_check_time"`
+	ChatIDs             []int64  `json:"chat_ids"`
 }
 
 // Менеджер бота
@@ -79,6 +80,37 @@ type BotManager struct {
 	notificationChan chan RSSItem
 	ctx              context.Context
 	cancel           context.CancelFunc
+	stateMu          sync.Mutex
+	lastCheckTime    string
+}
+
+func (bm *BotManager) persistState() error {
+	// Snapshot known articles
+	bm.knownArticlesMu.RLock()
+	articleList := make([]string, 0, len(bm.knownArticles))
+	for guid := range bm.knownArticles {
+		articleList = append(articleList, guid)
+	}
+	bm.knownArticlesMu.RUnlock()
+
+	// Snapshot chats
+	bm.chatsMu.RLock()
+	chatIDs := make([]int64, 0, len(bm.chats))
+	for chatID := range bm.chats {
+		chatIDs = append(chatIDs, chatID)
+	}
+	bm.chatsMu.RUnlock()
+
+	bm.stateMu.Lock()
+	defer bm.stateMu.Unlock()
+
+	state := &State{
+		LastCheckedArticles: articleList,
+		LastCheckTime:       bm.lastCheckTime,
+		ChatIDs:             chatIDs,
+	}
+
+	return saveState(bm.stateFile, state)
 }
 
 func truncateToTelegramLimit(text string) string {
@@ -526,6 +558,7 @@ func loadState(filename string) (*State, error) {
 			return &State{
 				LastCheckedArticles: []string{},
 				LastCheckTime:       "",
+				ChatIDs:             []int64{},
 			}, nil
 		}
 		return nil, err
@@ -640,18 +673,11 @@ func (bm *BotManager) checkRSSFeed() error {
 		log.Printf("Found %d new articles", len(newArticles))
 	}
 
-	// Сохраняем состояние
-	articleList := make([]string, 0, len(bm.knownArticles))
-	for guid := range bm.knownArticles {
-		articleList = append(articleList, guid)
-	}
-
-	state := &State{
-		LastCheckedArticles: articleList,
-		LastCheckTime:       time.Now().Format(time.RFC3339),
-	}
-
-	if err := saveState(bm.stateFile, state); err != nil {
+	// Сохраняем состояние (включая чаты)
+	bm.stateMu.Lock()
+	bm.lastCheckTime = time.Now().Format(time.RFC3339)
+	bm.stateMu.Unlock()
+	if err := bm.persistState(); err != nil {
 		log.Printf("Failed to save state: %v", err)
 	}
 
@@ -756,12 +782,51 @@ func (bm *BotManager) sendNotificationToAllChatsWithPreview(item RSSItem, previe
 	}
 }
 
+func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL string) {
+	if imageURL != "" {
+		caption := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+		photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
+		photo.Caption = caption
+		photo.ParseMode = "HTML"
+
+		if _, err := bm.bot.Send(photo); err != nil {
+			log.Printf("❌ Failed to send photo to chat %d: %v", chatID, err)
+			// Fallback: отправляем текстовое сообщение
+			textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+			msg := tgbotapi.NewMessage(chatID, textMsg)
+			msg.ParseMode = "HTML"
+			if _, msgErr := bm.bot.Send(msg); msgErr != nil {
+				log.Printf("❌ Failed to send fallback text message to chat %d: %v", chatID, msgErr)
+			}
+		}
+		return
+	}
+
+	// Изображение не найдено, отправляем текстовое сообщение с ссылкой
+	textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
+	msg := tgbotapi.NewMessage(chatID, textMsg)
+	msg.ParseMode = "HTML"
+	if _, err := bm.bot.Send(msg); err != nil {
+		log.Printf("❌ Failed to send text message to chat %d: %v", chatID, err)
+	}
+}
+
 // Добавление чата в список
 func (bm *BotManager) addChat(chatID int64) {
+	isNew := false
 	bm.chatsMu.Lock()
-	defer bm.chatsMu.Unlock()
-	bm.chats[chatID] = true
-	log.Printf("Chat %d added to notification list", chatID)
+	if !bm.chats[chatID] {
+		bm.chats[chatID] = true
+		isNew = true
+	}
+	bm.chatsMu.Unlock()
+
+	if isNew {
+		log.Printf("Chat %d added to notification list", chatID)
+		if err := bm.persistState(); err != nil {
+			log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
+		}
+	}
 }
 
 // Обработка обновлений Telegram
@@ -849,33 +914,23 @@ func (bm *BotManager) handleUpdates() {
 						log.Printf("⚠️  Failed to fetch article image: %v", err)
 					}
 
-					if imageURL != "" {
-						// Отправляем фото с подписью-ссылкой
-						caption := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
-						photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(imageURL))
-						photo.Caption = caption
-						photo.ParseMode = "HTML"
+					// Рассылаем во все известные чаты (включая чат, откуда пришла команда)
+					bm.addChat(chatID)
 
-						if _, err := bm.bot.Send(photo); err != nil {
-							log.Printf("❌ Failed to send photo to chat %d: %v", chatID, err)
-							// Fallback: отправляем текстовое сообщение
-							textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
-							msg := tgbotapi.NewMessage(chatID, textMsg)
-							msg.ParseMode = "HTML"
-							bm.bot.Send(msg)
-						} else {
-							log.Printf("✅ Sent photo with article to chat %d", chatID)
-						}
-					} else {
-						// Изображение не найдено, отправляем текстовое сообщение с ссылкой
-						textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
-						msg := tgbotapi.NewMessage(chatID, textMsg)
-						msg.ParseMode = "HTML"
-						if _, err := bm.bot.Send(msg); err != nil {
-							log.Printf("❌ Failed to send text message to chat %d: %v", chatID, err)
-						} else {
-							log.Printf("✅ Sent text message with article link to chat %d", chatID)
-						}
+					bm.chatsMu.RLock()
+					allChatIDs := make([]int64, 0, len(bm.chats))
+					for id := range bm.chats {
+						allChatIDs = append(allChatIDs, id)
+					}
+					bm.chatsMu.RUnlock()
+
+					if len(allChatIDs) == 0 {
+						log.Printf("No chats registered, skipping /check broadcast for article: %s", item.Title)
+						continue
+					}
+
+					for _, targetChatID := range allChatIDs {
+						bm.sendLastArticleToChat(targetChatID, item, imageURL)
 					}
 				case "about":
 					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
@@ -1007,6 +1062,7 @@ func main() {
 		state = &State{
 			LastCheckedArticles: []string{},
 			LastCheckTime:       "",
+			ChatIDs:             []int64{},
 		}
 	} else {
 		log.Printf("✅ State loaded: %d known articles, last check: %s", len(state.LastCheckedArticles), state.LastCheckTime)
@@ -1016,6 +1072,12 @@ func main() {
 	knownArticles := make(map[string]bool)
 	for _, guid := range state.LastCheckedArticles {
 		knownArticles[guid] = true
+	}
+
+	// Инициализируем известные чаты из state.json (чтобы не терять группы после рестарта)
+	chats := make(map[int64]bool)
+	for _, chatID := range state.ChatIDs {
+		chats[chatID] = true
 	}
 
 	bm := &BotManager{
@@ -1029,10 +1091,11 @@ func main() {
 		httpClient:       authClient,
 		stateFile:        stateFileName,
 		knownArticles:    knownArticles,
-		chats:            make(map[int64]bool),
+		chats:            chats,
 		notificationChan: make(chan RSSItem, 100),
 		ctx:              ctx,
 		cancel:           cancel,
+		lastCheckTime:    state.LastCheckTime,
 	}
 
 	// Запускаем горутины
