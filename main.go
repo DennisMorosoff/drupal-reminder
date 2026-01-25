@@ -85,6 +85,7 @@ type BotManager struct {
 }
 
 func (bm *BotManager) persistState() error {
+	log.Printf("DEBUG: persistState started")
 	// Snapshot known articles
 	bm.knownArticlesMu.RLock()
 	articleList := make([]string, 0, len(bm.knownArticles))
@@ -92,6 +93,7 @@ func (bm *BotManager) persistState() error {
 		articleList = append(articleList, guid)
 	}
 	bm.knownArticlesMu.RUnlock()
+	log.Printf("DEBUG: persistState: snapshot articles done, count: %d", len(articleList))
 
 	// Snapshot chats
 	bm.chatsMu.RLock()
@@ -100,9 +102,11 @@ func (bm *BotManager) persistState() error {
 		chatIDs = append(chatIDs, chatID)
 	}
 	bm.chatsMu.RUnlock()
+	log.Printf("DEBUG: persistState: snapshot chats done, count: %d", len(chatIDs))
 
 	bm.stateMu.Lock()
 	defer bm.stateMu.Unlock()
+	log.Printf("DEBUG: persistState: stateMu locked")
 
 	state := &State{
 		LastCheckedArticles: articleList,
@@ -110,7 +114,14 @@ func (bm *BotManager) persistState() error {
 		ChatIDs:             chatIDs,
 	}
 
-	return saveState(bm.stateFile, state)
+	log.Printf("DEBUG: persistState: calling saveState")
+	err := saveState(bm.stateFile, state)
+	if err != nil {
+		log.Printf("DEBUG: persistState: saveState returned error: %v", err)
+	} else {
+		log.Printf("DEBUG: persistState: saveState completed successfully")
+	}
+	return err
 }
 
 func truncateToTelegramLimit(text string) string {
@@ -574,12 +585,21 @@ func loadState(filename string) (*State, error) {
 
 // Сохранение состояния в файл
 func saveState(filename string, state *State) error {
+	log.Printf("DEBUG: saveState started for file: %s", filename)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
+		log.Printf("DEBUG: saveState: json.MarshalIndent failed: %v", err)
 		return err
 	}
+	log.Printf("DEBUG: saveState: json.MarshalIndent completed, data size: %d bytes", len(data))
 
-	return os.WriteFile(filename, data, 0644)
+	err = os.WriteFile(filename, data, 0644)
+	if err != nil {
+		log.Printf("DEBUG: saveState: os.WriteFile failed: %v", err)
+	} else {
+		log.Printf("DEBUG: saveState: os.WriteFile completed successfully")
+	}
+	return err
 }
 
 // Получение RSS с HTTP Basic Auth
