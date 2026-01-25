@@ -861,6 +861,39 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 	}
 }
 
+// Отправка уведомления о релизе во все чаты
+func (bm *BotManager) sendReleaseToAllChats(releaseText string) {
+	message := "🚀 Новый релиз: " + releaseText
+
+	// Разбиваем на части, если нужно
+	messages := splitToTelegramMessages(message)
+
+	// Получаем список чатов
+	bm.chatsMu.RLock()
+	chatIDs := make([]int64, 0, len(bm.chats))
+	for chatID := range bm.chats {
+		chatIDs = append(chatIDs, chatID)
+	}
+	bm.chatsMu.RUnlock()
+
+	if len(chatIDs) == 0 {
+		log.Printf("No chats registered, skipping release notification")
+		return
+	}
+
+	// Отправляем каждую часть во все чаты
+	for _, chatID := range chatIDs {
+		for _, msgText := range messages {
+			msg := tgbotapi.NewMessage(chatID, msgText)
+			if _, err := bm.bot.Send(msg); err != nil {
+				log.Printf("Failed to send release to chat %d: %v", chatID, err)
+			}
+		}
+	}
+
+	log.Printf("Release notification sent to %d chats", len(chatIDs))
+}
+
 // Добавление чата в список
 func (bm *BotManager) addChat(chatID int64) {
 	isNew := false
@@ -1069,6 +1102,42 @@ func (bm *BotManager) handleUpdates() {
 						version, buildTime, commitHash)
 					msg := tgbotapi.NewMessage(chatID, versionInfo)
 					bm.bot.Send(msg)
+				case "release":
+					// Только в личке
+					if update.Message.Chat.Type != "private" {
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "Команда /release доступна только в личных сообщениях."))
+						continue
+					}
+
+					// Извлечение текста после команды
+					// Сначала пробуем CommandArguments (работает с ботнеймами)
+					releaseText := strings.TrimSpace(update.Message.CommandArguments())
+					// Если CommandArguments пустой, пробуем извлечь из полного текста
+					if releaseText == "" {
+						releaseText = strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/release"))
+						// Убираем возможный ботнейм
+						if strings.HasPrefix(releaseText, "@") {
+							parts := strings.Fields(releaseText)
+							if len(parts) > 1 {
+								releaseText = strings.Join(parts[1:], " ")
+							} else {
+								releaseText = ""
+							}
+						}
+					}
+					if releaseText == "" {
+						bm.bot.Send(tgbotapi.NewMessage(chatID, "Пожалуйста, укажите текст релиза после команды /release"))
+						continue
+					}
+
+					// Отправка релиза
+					bm.sendReleaseToAllChats(releaseText)
+
+					// Подтверждение отправителю
+					bm.chatsMu.RLock()
+					totalChats := len(bm.chats)
+					bm.chatsMu.RUnlock()
+					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Релиз отправлен в %d чат(ов)", totalChats)))
 				default:
 					msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Попробуйте /start, /add, /fetch, /check, /status или /about")
 					bm.bot.Send(msg)
