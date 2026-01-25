@@ -862,6 +862,9 @@ func (bm *BotManager) addChat(chatID int64) {
 func (bm *BotManager) handleUpdates() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
+	// Явно запрашиваем нужные типы апдейтов, чтобы стабильно получать события
+	// о добавлении/удалении бота из групп (my_chat_member) и сообщения (message).
+	u.AllowedUpdates = []string{"message", "my_chat_member"}
 
 	updatesChan := bm.bot.GetUpdatesChan(u)
 
@@ -960,7 +963,17 @@ func (bm *BotManager) handleUpdates() {
 						log.Printf("⚠️  Failed to fetch article image: %v", err)
 					}
 
-					// Рассылаем во все известные чаты (включая чат, откуда пришла команда)
+					// Поведение /check:
+					// - в личке: показать статью в личке и разослать во все известные чаты
+					// - в группе: показать статью только в этой группе (без общей рассылки)
+					if update.Message.Chat.Type != "private" {
+						// Для групп/супергрупп не делаем broadcast
+						bm.addChat(chatID)
+						bm.sendLastArticleToChat(chatID, item, imageURL)
+						continue
+					}
+
+					// Личка: включаем этот чат в базу и делаем рассылку по всем известным чатам
 					bm.addChat(chatID)
 
 					bm.chatsMu.RLock()
@@ -975,7 +988,7 @@ func (bm *BotManager) handleUpdates() {
 						continue
 					}
 
-					log.Printf("Broadcasting /check to %d chats: %v", len(allChatIDs), allChatIDs)
+					log.Printf("Broadcasting /check (private) to %d chats: %v", len(allChatIDs), allChatIDs)
 					for _, targetChatID := range allChatIDs {
 						bm.sendLastArticleToChat(targetChatID, item, imageURL)
 					}
