@@ -425,25 +425,25 @@ func (bm *BotManager) fetchRSSFeed() (*RSSFeed, error) {
 	// Проверяем ошибки авторизации
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		log.Printf("⚠️  Authentication failed (status: %d), attempting to renew auth...", resp.StatusCode)
-		
+
 		// Пытаемся перелогиниться (только для метода cookie)
 		if bm.authMethod == "cookie" {
 			if err := bm.renewAuth(); err != nil {
 				return nil, fmt.Errorf("authentication failed and renewal failed: %w", err)
 			}
-			
+
 			// Повторяем запрос после перелогинивания
 			req, err := bm.newRequest("GET", bm.rssURL, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create request after auth renewal: %w", err)
 			}
-			
+
 			resp, err = bm.httpClient.Do(req)
 			if err != nil {
 				return nil, fmt.Errorf("failed to fetch RSS after auth renewal: %w", err)
 			}
 			defer resp.Body.Close()
-			
+
 			if resp.StatusCode != http.StatusOK {
 				return nil, fmt.Errorf("authentication still failing after renewal (status: %d)", resp.StatusCode)
 			}
@@ -682,7 +682,7 @@ func (bm *BotManager) handleUpdates() {
 				case "check":
 					log.Printf("Command /check received from chat %d", chatID)
 					log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
-					
+
 					feed, err := bm.fetchRSSFeed()
 					if err != nil {
 						log.Printf("❌ Failed to fetch RSS feed: %v", err)
