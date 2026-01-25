@@ -580,44 +580,26 @@ func loadState(filename string) (*State, error) {
 		return nil, err
 	}
 
-	// Инициализируем ChatIDs, если оно nil (для старых версий state.json)
-	if state.ChatIDs == nil {
-		state.ChatIDs = []int64{}
-	}
-
 	return &state, nil
 }
 
 // Сохранение состояния в файл
 func saveState(filename string, state *State) error {
 	log.Printf("DEBUG: saveState started for file: %s", filename)
-	log.Printf("DEBUG: saveState: saving %d chat IDs: %v", len(state.ChatIDs), state.ChatIDs)
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		log.Printf("DEBUG: saveState: json.MarshalIndent failed: %v", err)
 		return err
 	}
 	log.Printf("DEBUG: saveState: json.MarshalIndent completed, data size: %d bytes", len(data))
-	log.Printf("DEBUG: saveState: JSON content preview (first 500 chars): %s", string(data[:min(500, len(data))]))
 
 	err = os.WriteFile(filename, data, 0644)
 	if err != nil {
 		log.Printf("DEBUG: saveState: os.WriteFile failed: %v", err)
 	} else {
 		log.Printf("DEBUG: saveState: os.WriteFile completed successfully")
-		// Проверяем, что файл действительно записан
-		if fileInfo, statErr := os.Stat(filename); statErr == nil {
-			log.Printf("DEBUG: saveState: file written, size: %d bytes, mod time: %v", fileInfo.Size(), fileInfo.ModTime())
-		}
 	}
 	return err
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // Получение RSS с HTTP Basic Auth
@@ -879,39 +861,6 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 	}
 }
 
-// Отправка уведомления о релизе во все чаты
-func (bm *BotManager) sendReleaseToAllChats(releaseText string) {
-	message := "🚀 Новый релиз: " + releaseText
-
-	// Разбиваем на части, если нужно
-	messages := splitToTelegramMessages(message)
-
-	// Получаем список чатов
-	bm.chatsMu.RLock()
-	chatIDs := make([]int64, 0, len(bm.chats))
-	for chatID := range bm.chats {
-		chatIDs = append(chatIDs, chatID)
-	}
-	bm.chatsMu.RUnlock()
-
-	if len(chatIDs) == 0 {
-		log.Printf("No chats registered, skipping release notification")
-		return
-	}
-
-	// Отправляем каждую часть во все чаты
-	for _, chatID := range chatIDs {
-		for _, msgText := range messages {
-			msg := tgbotapi.NewMessage(chatID, msgText)
-			if _, err := bm.bot.Send(msg); err != nil {
-				log.Printf("Failed to send release to chat %d: %v", chatID, err)
-			}
-		}
-	}
-
-	log.Printf("Release notification sent to %d chats", len(chatIDs))
-}
-
 // Добавление чата в список
 func (bm *BotManager) addChat(chatID int64) {
 	isNew := false
@@ -924,14 +873,13 @@ func (bm *BotManager) addChat(chatID int64) {
 
 	if isNew {
 		log.Printf("Chat %d added to notification list", chatID)
-		// Сохраняем состояние синхронно, чтобы гарантировать сохранение
 		log.Printf("DEBUG: Before persistState in addChat for chat %d", chatID)
 		if err := bm.persistState(); err != nil {
 			log.Printf("Failed to save state after adding chat %d: %v", chatID, err)
 		} else {
 			log.Printf("DEBUG: persistState completed successfully for chat %d", chatID)
 		}
-		log.Printf("DEBUG: After persistState for chat %d", chatID)
+		log.Printf("DEBUG: After persistState in addChat for chat %d", chatID)
 	} else {
 		log.Printf("DEBUG: Chat %d already exists, skipping persistState", chatID)
 	}
@@ -991,29 +939,10 @@ func (bm *BotManager) handleUpdates() {
 
 			if update.Message.IsCommand() {
 				switch update.Message.Command() {
-				case "add":
-					// Явная регистрация текущего чата для уведомлений
-					if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
-						bm.addChat(chatID)
-						// Принудительно сохраняем состояние после команды /add
-						log.Printf("DEBUG: /add command: forcing state save for chat %d", chatID)
-						if err := bm.persistState(); err != nil {
-							log.Printf("ERROR: Failed to save state after /add command: %v", err)
-						} else {
-							log.Printf("DEBUG: /add command: state saved successfully")
-						}
-						reply := fmt.Sprintf(
-							"✅ Чат зарегистрирован для уведомлений.\n\nChat ID: %d\nТип чата: %s",
-							chatID, update.Message.Chat.Type,
-						)
-						bm.bot.Send(tgbotapi.NewMessage(chatID, reply))
-					} else {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Команда /add работает только в группе/супергруппе. Добавьте бота в группу и выполните /add там."))
-					}
 				case "start":
 					bm.addChat(chatID)
 					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /add, /check, /release, /about, /status",
+						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
 					bm.bot.Send(msg)
@@ -1125,47 +1054,8 @@ func (bm *BotManager) handleUpdates() {
 						version, buildTime, commitHash)
 					msg := tgbotapi.NewMessage(chatID, versionInfo)
 					bm.bot.Send(msg)
-				case "release":
-					// Только в личке
-					if update.Message.Chat.Type != "private" {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Команда /release доступна только в личных сообщениях."))
-						continue
-					}
-
-					// Регистрируем личный чат, если еще не зарегистрирован
-					bm.addChat(chatID)
-
-					// Извлечение текста после команды
-					// Сначала пробуем CommandArguments (работает с ботнеймами)
-					releaseText := strings.TrimSpace(update.Message.CommandArguments())
-					// Если CommandArguments пустой, пробуем извлечь из полного текста
-					if releaseText == "" {
-						releaseText = strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/release"))
-						// Убираем возможный ботнейм
-						if strings.HasPrefix(releaseText, "@") {
-							parts := strings.Fields(releaseText)
-							if len(parts) > 1 {
-								releaseText = strings.Join(parts[1:], " ")
-							} else {
-								releaseText = ""
-							}
-						}
-					}
-					if releaseText == "" {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Пожалуйста, укажите текст релиза после команды /release"))
-						continue
-					}
-
-					// Отправка релиза
-					bm.sendReleaseToAllChats(releaseText)
-
-					// Подтверждение отправителю
-					bm.chatsMu.RLock()
-					totalChats := len(bm.chats)
-					bm.chatsMu.RUnlock()
-					bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Релиз отправлен в %d чат(ов)", totalChats)))
 				default:
-					msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Попробуйте /start, /add, /fetch, /check, /release, /status или /about")
+					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch, /check or /about")
 					bm.bot.Send(msg)
 				}
 			} else if update.Message.Text != "" {
@@ -1303,7 +1193,6 @@ func main() {
 	for _, chatID := range state.ChatIDs {
 		chats[chatID] = true
 	}
-	log.Printf("✅ Loaded %d chats from state: %v", len(chats), state.ChatIDs)
 
 	bm := &BotManager{
 		bot:              bot,
