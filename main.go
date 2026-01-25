@@ -722,7 +722,30 @@ func (bm *BotManager) startNotificationQueue() {
 				default:
 				}
 
-				bm.sendNotificationToAllChats(article)
+				// Получаем изображение статьи
+				imageURL, err := bm.fetchArticleImage(article.Link)
+				if err != nil {
+					log.Printf("⚠️  Failed to fetch article image: %v", err)
+				}
+
+				// Получаем список всех чатов
+				bm.chatsMu.RLock()
+				allChatIDs := make([]int64, 0, len(bm.chats))
+				for chatID := range bm.chats {
+					allChatIDs = append(allChatIDs, chatID)
+				}
+				bm.chatsMu.RUnlock()
+
+				if len(allChatIDs) == 0 {
+					log.Printf("No chats registered, skipping notification for article: %s", article.Title)
+					return
+				}
+
+				// Отправляем статью во все чаты (как в команде /check)
+				log.Printf("Sending new article notification to %d chats: %s", len(allChatIDs), article.Title)
+				for _, chatID := range allChatIDs {
+					bm.sendLastArticleToChat(chatID, article, imageURL)
+				}
 			}(item)
 
 		case <-bm.ctx.Done():
