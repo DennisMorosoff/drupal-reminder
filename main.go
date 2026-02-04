@@ -97,7 +97,7 @@ func (bm *BotManager) sendWithRetry(ctx context.Context, c tgbotapi.Chattable) (
 		lastErr = err
 
 		var tgErr *tgbotapi.Error
-		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters != nil && tgErr.ResponseParameters.RetryAfter > 0 {
+		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters.RetryAfter > 0 {
 			wait := time.Duration(tgErr.ResponseParameters.RetryAfter+1) * time.Second
 			log.Printf("⚠️ Telegram rate limit (429), retry_after=%ds; waiting %s (attempt %d/%d)",
 				tgErr.ResponseParameters.RetryAfter, wait, attempt, maxAttempts)
@@ -128,7 +128,7 @@ func (bm *BotManager) editWithRetry(ctx context.Context, cfg tgbotapi.EditMessag
 		lastErr = err
 
 		var tgErr *tgbotapi.Error
-		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters != nil && tgErr.ResponseParameters.RetryAfter > 0 {
+		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters.RetryAfter > 0 {
 			wait := time.Duration(tgErr.ResponseParameters.RetryAfter+1) * time.Second
 			log.Printf("⚠️ Telegram rate limit (429) on edit, retry_after=%ds; waiting %s (attempt %d/%d)",
 				tgErr.ResponseParameters.RetryAfter, wait, attempt, maxAttempts)
