@@ -190,6 +190,149 @@ func (bm *BotManager) updateProgress(ctx context.Context, chatID int64, messageI
 	}
 }
 
+func (bm *BotManager) processCommand(chatID int64, chatType string, command string, args string, progressMessageID *int) {
+	switch command {
+	case "start":
+		log.Printf("Processing /start command")
+		bm.addChat(chatID)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf(
+			"✅ Команда /start обработана!\n\nПривет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /release, /about, /status",
+			chatID, chatType,
+		))
+	case "fetch":
+		log.Printf("Processing /fetch command")
+		url := os.Getenv("DRUPAL_SITE_URL")
+		if url == "" {
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, "❌ DRUPAL_SITE_URL is not set")
+			return
+		}
+
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf("⏳ Загружаю контент с %s...", url))
+
+		content, err := bm.fetchWebsiteContent(url)
+		if err != nil {
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, "❌ Ошибка при загрузке контента: "+err.Error())
+			return
+		}
+
+		truncatedContent := truncateToTelegramLimit(content)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, truncateToTelegramLimit("✅ Контент загружен:\n\n"+truncatedContent))
+	case "check":
+		log.Printf("Command /check received from chat %d", chatID)
+		log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
+
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, "⏳ Получаю RSS-ленту...")
+
+		feed, err := bm.fetchRSSFeed()
+		if err != nil {
+			log.Printf("❌ Failed to fetch RSS feed: %v", err)
+			errorMsg := fmt.Sprintf("❌ Ошибка при получении RSS-ленты: %s", err.Error())
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, errorMsg)
+			return
+		}
+
+		log.Printf("✅ RSS feed fetched successfully: %d articles found", len(feed.Channel.Items))
+
+		if len(feed.Channel.Items) == 0 {
+			log.Printf("⚠️  No articles found in RSS feed")
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, "⚠️ Нет статей в RSS-ленте")
+			return
+		}
+
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf("✅ Найдено статей: %d\n⏳ Обрабатываю последнюю статью...", len(feed.Channel.Items)))
+
+		// Берем только последнюю (первую в списке) статью
+		// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
+		item := feed.Channel.Items[0]
+		log.Printf("Processing last article: %s (will be sent regardless of notification status)", item.Title)
+
+		// Пытаемся получить изображение статьи
+		imageURL, err := bm.fetchArticleImage(item.Link)
+		if err != nil {
+			log.Printf("⚠️  Failed to fetch article image: %v", err)
+			imageURL = "" // Убеждаемся, что imageURL пустая при ошибке
+		}
+		if imageURL != "" {
+			log.Printf("✅ Article image found: %s", imageURL)
+		} else {
+			log.Printf("ℹ️  No article image, will send text message")
+		}
+
+		// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
+		// Всегда отправляем статью в текущий чат
+		log.Printf("DEBUG: Before addChat for chat %d", chatID)
+		bm.addChat(chatID)
+		log.Printf("DEBUG: After addChat for chat %d", chatID)
+		log.Printf("Sending article to current chat %d: %s", chatID, item.Title)
+		log.Printf("DEBUG: Before sendLastArticleToChat for chat %d", chatID)
+		bm.sendLastArticleToChat(chatID, item, imageURL)
+		log.Printf("DEBUG: After sendLastArticleToChat for chat %d", chatID)
+
+		// Поведение /check:
+		// - в личке: дополнительно разослать во все известные чаты (кроме текущего)
+		// - в группе: только в текущей группе (без общей рассылки)
+		if chatType != "private" {
+			// Для групп/супергрупп не делаем broadcast
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, "✅ Готово: отправил в этот чат")
+			return
+		}
+
+		// Личка: делаем рассылку по всем известным чатам (кроме текущего)
+		bm.chatsMu.RLock()
+		allChatIDs := make([]int64, 0, len(bm.chats))
+		for id := range bm.chats {
+			if id != chatID { // Исключаем текущий чат, так как уже отправили
+				allChatIDs = append(allChatIDs, id)
+			}
+		}
+		bm.chatsMu.RUnlock()
+
+		if len(allChatIDs) > 0 {
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf("📣 Рассылаю в %d чатов...", len(allChatIDs)))
+			log.Printf("Broadcasting /check (private) to %d additional chats: %v", len(allChatIDs), allChatIDs)
+			for _, targetChatID := range allChatIDs {
+				bm.sendLastArticleToChat(targetChatID, item, imageURL)
+			}
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf("✅ Готово: отправил в %d чатов", len(allChatIDs)+1))
+		} else {
+			log.Printf("No additional chats to broadcast to")
+			bm.updateProgress(bm.ctx, chatID, progressMessageID, "✅ Готово: других чатов для рассылки нет")
+		}
+	case "release":
+		log.Printf("Processing /release command")
+		releaseInfo := fmt.Sprintf("✅ Команда /release обработана!\n\n🚀 Последний релиз Drupal Reminder Bot\n\n"+
+			"Версия: %s\n"+
+			"Дата сборки: %s\n"+
+			"Коммит: %s",
+			version, buildTime, commitHash)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, releaseInfo)
+	case "status":
+		log.Printf("Processing /status command")
+		isRegistered := false
+		bm.chatsMu.RLock()
+		isRegistered = bm.chats[chatID]
+		totalChats := len(bm.chats)
+		bm.chatsMu.RUnlock()
+
+		text := fmt.Sprintf(
+			"✅ Команда /status обработана!\n\n📊 Статус:\nChat ID: %d\nТип чата: %s\nЗарегистрирован: %t\nВсего чатов в базе: %d",
+			chatID, chatType, isRegistered, totalChats,
+		)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, text)
+	case "about":
+		log.Printf("Processing /about command")
+		versionInfo := fmt.Sprintf("✅ Команда /about обработана!\n\n🤖 Drupal Reminder Bot\n\n"+
+			"Версия: %s\n"+
+			"Сборка: %s\n"+
+			"Коммит: %s",
+			version, buildTime, commitHash)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, versionInfo)
+	default:
+		log.Printf("⚠️  Unknown command: /%s", command)
+		bm.updateProgress(bm.ctx, chatID, progressMessageID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /release, /status или /about", command))
+	}
+}
+
 func (bm *BotManager) persistState() error {
 	log.Printf("DEBUG: persistState started")
 	// Snapshot known articles
@@ -1069,150 +1212,22 @@ func (bm *BotManager) handleUpdates() {
 
 			if update.Message.IsCommand() {
 				command := update.Message.Command()
+				args := update.Message.CommandArguments()
+				chatType := update.Message.Chat.Type
 				log.Printf("🔧 Command received: /%s from chat %d", command, chatID)
-				progressMessageID := 0
-				bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⏳ Обрабатываю /%s...", command))
 
-				switch command {
-				case "start":
-					log.Printf("Processing /start command")
-					bm.addChat(chatID)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf(
-						"✅ Команда /start обработана!\n\nПривет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /release, /about, /status",
-						chatID, update.Message.Chat.Type,
-					))
-				case "fetch":
-					log.Printf("Processing /fetch command")
-					url := os.Getenv("DRUPAL_SITE_URL")
-					if url == "" {
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "❌ DRUPAL_SITE_URL is not set")
-						continue
-					}
-
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⏳ Загружаю контент с %s...", url))
-
-					content, err := bm.fetchWebsiteContent(url)
-					if err != nil {
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "❌ Ошибка при загрузке контента: "+err.Error())
-						continue
-					}
-
-					truncatedContent := truncateToTelegramLimit(content)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, truncateToTelegramLimit("✅ Контент загружен:\n\n"+truncatedContent))
-				case "check":
-					log.Printf("Command /check received from chat %d", chatID)
-					log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
-
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, "⏳ Получаю RSS-ленту...")
-
-					feed, err := bm.fetchRSSFeed()
-					if err != nil {
-						log.Printf("❌ Failed to fetch RSS feed: %v", err)
-						errorMsg := fmt.Sprintf("❌ Ошибка при получении RSS-ленты: %s", err.Error())
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, errorMsg)
-						continue
-					}
-
-					log.Printf("✅ RSS feed fetched successfully: %d articles found", len(feed.Channel.Items))
-
-					if len(feed.Channel.Items) == 0 {
-						log.Printf("⚠️  No articles found in RSS feed")
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "⚠️ Нет статей в RSS-ленте")
-						continue
-					}
-
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("✅ Найдено статей: %d\n⏳ Обрабатываю последнюю статью...", len(feed.Channel.Items)))
-
-					// Берем только последнюю (первую в списке) статью
-					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
-					item := feed.Channel.Items[0]
-					log.Printf("Processing last article: %s (will be sent regardless of notification status)", item.Title)
-
-					// Пытаемся получить изображение статьи
-					imageURL, err := bm.fetchArticleImage(item.Link)
-					if err != nil {
-						log.Printf("⚠️  Failed to fetch article image: %v", err)
-						imageURL = "" // Убеждаемся, что imageURL пустая при ошибке
-					}
-					if imageURL != "" {
-						log.Printf("✅ Article image found: %s", imageURL)
-					} else {
-						log.Printf("ℹ️  No article image, will send text message")
-					}
-
-					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
-					// Всегда отправляем статью в текущий чат
-					log.Printf("DEBUG: Before addChat for chat %d", chatID)
-					bm.addChat(chatID)
-					log.Printf("DEBUG: After addChat for chat %d", chatID)
-					log.Printf("Sending article to current chat %d: %s", chatID, item.Title)
-					log.Printf("DEBUG: Before sendLastArticleToChat for chat %d", chatID)
-					bm.sendLastArticleToChat(chatID, item, imageURL)
-					log.Printf("DEBUG: After sendLastArticleToChat for chat %d", chatID)
-
-					// Поведение /check:
-					// - в личке: дополнительно разослать во все известные чаты (кроме текущего)
-					// - в группе: только в текущей группе (без общей рассылки)
-					if update.Message.Chat.Type != "private" {
-						// Для групп/супергрупп не делаем broadcast
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "✅ Готово: отправил в этот чат")
-						continue
-					}
-
-					// Личка: делаем рассылку по всем известным чатам (кроме текущего)
-					bm.chatsMu.RLock()
-					allChatIDs := make([]int64, 0, len(bm.chats))
-					for id := range bm.chats {
-						if id != chatID { // Исключаем текущий чат, так как уже отправили
-							allChatIDs = append(allChatIDs, id)
-						}
-					}
-					bm.chatsMu.RUnlock()
-
-					if len(allChatIDs) > 0 {
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("📣 Рассылаю в %d чатов...", len(allChatIDs)))
-						log.Printf("Broadcasting /check (private) to %d additional chats: %v", len(allChatIDs), allChatIDs)
-						for _, targetChatID := range allChatIDs {
-							bm.sendLastArticleToChat(targetChatID, item, imageURL)
-						}
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("✅ Готово: отправил в %d чатов", len(allChatIDs)+1))
-					} else {
-						log.Printf("No additional chats to broadcast to")
-						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "✅ Готово: других чатов для рассылки нет")
-					}
-				case "release":
-					log.Printf("Processing /release command")
-					releaseInfo := fmt.Sprintf("✅ Команда /release обработана!\n\n🚀 Последний релиз Drupal Reminder Bot\n\n"+
-						"Версия: %s\n"+
-						"Дата сборки: %s\n"+
-						"Коммит: %s",
-						version, buildTime, commitHash)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, releaseInfo)
-				case "status":
-					log.Printf("Processing /status command")
-					isRegistered := false
-					bm.chatsMu.RLock()
-					isRegistered = bm.chats[chatID]
-					totalChats := len(bm.chats)
-					bm.chatsMu.RUnlock()
-
-					text := fmt.Sprintf(
-						"✅ Команда /status обработана!\n\n📊 Статус:\nChat ID: %d\nТип чата: %s\nЗарегистрирован: %t\nВсего чатов в базе: %d",
-						chatID, update.Message.Chat.Type, isRegistered, totalChats,
-					)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, text)
-				case "about":
-					log.Printf("Processing /about command")
-					versionInfo := fmt.Sprintf("✅ Команда /about обработана!\n\n🤖 Drupal Reminder Bot\n\n"+
-						"Версия: %s\n"+
-						"Сборка: %s\n"+
-						"Коммит: %s",
-						version, buildTime, commitHash)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, versionInfo)
-				default:
-					log.Printf("⚠️  Unknown command: /%s", command)
-					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /release, /status или /about", command))
+				// Немедленное подтверждение получения команды (чтобы было видно, что бот жив).
+				progressMessageID, err := bm.startProgress(bm.ctx, chatID, fmt.Sprintf("✅ Команда /%s получена\n⏳ Выполняю...", command))
+				if err != nil {
+					log.Printf("❌ Failed to send initial command ack: %v", err)
+					progressMessageID = 0
 				}
+
+				// Асинхронно выполняем команду, чтобы /release не ждал /check и т.п.
+				go func(chatID int64, chatType string, command string, args string, progressMessageID int) {
+					pid := progressMessageID
+					bm.processCommand(chatID, chatType, command, args, &pid)
+				}(chatID, chatType, command, args, progressMessageID)
 			} else if update.Message.Text != "" {
 				log.Printf("📝 Non-command text message received: %q", update.Message.Text)
 				msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("📝 Получен текст: %q\n\nИзвините, я обрабатываю только команды. Используйте /start для списка команд.", update.Message.Text))
