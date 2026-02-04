@@ -359,8 +359,28 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          timeout: 30s
+          command_timeout: 10m
           script: |
+            set +e  # Не прерывать выполнение при ошибках (хотим увидеть все проверки)
+            set -u  # Прерывать при использовании неинициализированных переменных
+            
             echo "=== SSH Server Configuration Check (sshd_config) ==="
+            echo ""
+            
+            # Проверка доступности sudo (если нужен)
+            SUDO_AVAILABLE=false
+            if command -v sudo >/dev/null 2>&1; then
+              if sudo -n true 2>/dev/null; then
+                SUDO_AVAILABLE=true
+                echo "✅ Sudo доступен без пароля"
+              else
+                echo "⚠️  Sudo доступен, но может требовать пароль"
+              fi
+            else
+              echo "ℹ️  Sudo недоступен, будут использоваться только команды без sudo"
+            fi
             echo ""
             
             # Функция для проверки значений в sshd_config
@@ -375,12 +395,23 @@ jobs:
                 return 1
               fi
               
+              # Пытаемся прочитать файл без sudo, если не получается - с sudo
+              local grep_cmd="grep"
+              if [ ! -r "$config_file" ]; then
+                if command -v sudo >/dev/null 2>&1; then
+                  grep_cmd="sudo grep"
+                else
+                  echo "   ⚠️  Cannot read $config_file (no sudo access)"
+                  return 1
+                fi
+              fi
+              
               # Ищем значение (учитываем закомментированные строки)
-              local actual_value=$(sudo grep -i "^[^#]*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              local actual_value=$($grep_cmd -i "^[^#]*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
               
               if [ -z "$actual_value" ]; then
                 # Проверяем закомментированные значения (значение по умолчанию)
-                local commented_value=$(sudo grep -i "^#.*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+                local commented_value=$($grep_cmd -i "^#.*$key" "$config_file" 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
                 if [ -n "$commented_value" ]; then
                   actual_value="$commented_value (default, commented)"
                 else
@@ -429,7 +460,14 @@ jobs:
             
             # Проверка 3: AuthorizedKeysFile
             echo "3️⃣  Checking AuthorizedKeysFile path..."
-            AUTHORIZED_KEYS_PATH=$(sudo grep -i "^[^#]*AuthorizedKeysFile" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            # Пытаемся прочитать без sudo, если не получается - с sudo
+            if [ -r "/etc/ssh/sshd_config" ]; then
+              AUTHORIZED_KEYS_PATH=$(grep -i "^[^#]*AuthorizedKeysFile" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            elif command -v sudo >/dev/null 2>&1; then
+              AUTHORIZED_KEYS_PATH=$(sudo grep -i "^[^#]*AuthorizedKeysFile" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            else
+              AUTHORIZED_KEYS_PATH=""
+            fi
             if [ -z "$AUTHORIZED_KEYS_PATH" ]; then
               AUTHORIZED_KEYS_PATH="~/.ssh/authorized_keys (default)"
             fi
@@ -464,7 +502,14 @@ jobs:
             if check_sshd_config "PermitRootLogin" "no"; then
               echo "   ✅ Root login is disabled (recommended for security)"
             else
-              ROOT_LOGIN_VALUE=$(sudo grep -i "^[^#]*PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              # Пытаемся прочитать без sudo, если не получается - с sudo
+              if [ -r "/etc/ssh/sshd_config" ]; then
+                ROOT_LOGIN_VALUE=$(grep -i "^[^#]*PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              elif command -v sudo >/dev/null 2>&1; then
+                ROOT_LOGIN_VALUE=$(sudo grep -i "^[^#]*PermitRootLogin" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+              else
+                ROOT_LOGIN_VALUE=""
+              fi
               if [ "$ROOT_LOGIN_VALUE" = "prohibit-password" ] || [ "$ROOT_LOGIN_VALUE" = "prohibit-password (default, commented)" ]; then
                 echo "   ⚠️  Root login with password disabled, but key-based login allowed"
               else
@@ -486,7 +531,14 @@ jobs:
             
             # Проверка 6: MaxAuthTries
             echo "6️⃣  Checking MaxAuthTries..."
-            MAX_AUTH_TRIES=$(sudo grep -i "^[^#]*MaxAuthTries" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            # Пытаемся прочитать без sudo, если не получается - с sudo
+            if [ -r "/etc/ssh/sshd_config" ]; then
+              MAX_AUTH_TRIES=$(grep -i "^[^#]*MaxAuthTries" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            elif command -v sudo >/dev/null 2>&1; then
+              MAX_AUTH_TRIES=$(sudo grep -i "^[^#]*MaxAuthTries" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            else
+              MAX_AUTH_TRIES=""
+            fi
             if [ -z "$MAX_AUTH_TRIES" ]; then
               MAX_AUTH_TRIES="6 (default)"
             fi
@@ -500,7 +552,14 @@ jobs:
             
             # Проверка 7: LogLevel
             echo "7️⃣  Checking LogLevel..."
-            LOG_LEVEL=$(sudo grep -i "^[^#]*LogLevel" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            # Пытаемся прочитать без sudo, если не получается - с sudo
+            if [ -r "/etc/ssh/sshd_config" ]; then
+              LOG_LEVEL=$(grep -i "^[^#]*LogLevel" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            elif command -v sudo >/dev/null 2>&1; then
+              LOG_LEVEL=$(sudo grep -i "^[^#]*LogLevel" /etc/ssh/sshd_config 2>/dev/null | tail -1 | awk '{print $2}')
+            else
+              LOG_LEVEL=""
+            fi
             if [ -z "$LOG_LEVEL" ]; then
               LOG_LEVEL="INFO (default)"
             fi
@@ -561,13 +620,29 @@ jobs:
             echo "=== SSH Configuration Check Complete ==="
             echo ""
             echo "💡 To view full sshd_config:"
-            echo "   sudo cat /etc/ssh/sshd_config"
+            if [ -r "/etc/ssh/sshd_config" ]; then
+              echo "   cat /etc/ssh/sshd_config"
+            elif [ "$SUDO_AVAILABLE" = "true" ]; then
+              echo "   sudo cat /etc/ssh/sshd_config"
+            else
+              echo "   (requires sudo or root access)"
+            fi
             echo ""
             echo "💡 To test SSH config without restarting:"
-            echo "   sudo sshd -t"
+            if [ "$SUDO_AVAILABLE" = "true" ]; then
+              echo "   sudo sshd -t"
+            else
+              echo "   (requires sudo access)"
+            fi
             echo ""
             echo "💡 To apply changes and restart SSH:"
-            echo "   sudo systemctl restart ssh (or sshd)"
+            if [ "$SUDO_AVAILABLE" = "true" ]; then
+              echo "   sudo systemctl restart ssh (or sshd)"
+            else
+              echo "   (requires sudo access)"
+            fi
+            echo ""
+            echo "✅ SSH configuration check finished successfully"
 
       - name: Copy binary to server
         uses: appleboy/scp-action@v0.1.7
