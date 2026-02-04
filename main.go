@@ -913,7 +913,7 @@ func (bm *BotManager) handleUpdates() {
 
 	for update := range updatesChan {
 		log.Printf("📥 Received update: UpdateID=%d", update.UpdateID)
-		
+
 		select {
 		case <-bm.ctx.Done():
 			log.Printf("Context cancelled, stopping updates handler")
@@ -938,16 +938,16 @@ func (bm *BotManager) handleUpdates() {
 		// Обработка сообщений в группах (для регистрации чата)
 		if update.Message != nil {
 			chatID := update.Message.Chat.ID
-			log.Printf("📨 Message received: ChatID=%d, Type=%s, Text=%q, IsCommand=%t", 
+			log.Printf("📨 Message received: ChatID=%d, Type=%s, Text=%q, IsCommand=%t",
 				chatID, update.Message.Chat.Type, update.Message.Text, update.Message.IsCommand())
-			
+
 			// Отправляем подтверждение получения сообщения в чат
-			statusMsg := fmt.Sprintf("✅ Получено сообщение\nChat ID: %d\nТип: %s\nТекст: %q\nКоманда: %t", 
+			statusMsg := fmt.Sprintf("✅ Получено сообщение\nChat ID: %d\nТип: %s\nТекст: %q\nКоманда: %t",
 				chatID, update.Message.Chat.Type, update.Message.Text, update.Message.IsCommand())
 			if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, statusMsg)); err != nil {
 				log.Printf("❌ Failed to send status message: %v", err)
 			}
-			
+
 			if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
 				bm.addChat(chatID)
 			}
@@ -969,19 +969,19 @@ func (bm *BotManager) handleUpdates() {
 			if update.Message.IsCommand() {
 				command := update.Message.Command()
 				log.Printf("🔧 Command received: /%s from chat %d", command, chatID)
-				
+
 				// Отправляем подтверждение получения команды
 				cmdStatusMsg := fmt.Sprintf("🔧 Команда получена: /%s\nОбрабатываю...", command)
 				if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, cmdStatusMsg)); err != nil {
 					log.Printf("❌ Failed to send command status: %v", err)
 				}
-				
+
 				switch command {
 				case "start":
 					log.Printf("Processing /start command")
 					bm.addChat(chatID)
 					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
-						"✅ Команда /start обработана!\n\nПривет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /about, /status",
+						"✅ Команда /start обработана!\n\nПривет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /release, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
 					if _, err := bm.bot.Send(msg); err != nil {
@@ -1099,6 +1099,19 @@ func (bm *BotManager) handleUpdates() {
 					} else {
 						log.Printf("No additional chats to broadcast to")
 					}
+				case "release":
+					log.Printf("Processing /release command")
+					releaseInfo := fmt.Sprintf("✅ Команда /release обработана!\n\n🚀 Последний релиз Drupal Reminder Bot\n\n"+
+						"Версия: %s\n"+
+						"Дата сборки: %s\n"+
+						"Коммит: %s",
+						version, buildTime, commitHash)
+					msg := tgbotapi.NewMessage(chatID, releaseInfo)
+					if _, err := bm.bot.Send(msg); err != nil {
+						log.Printf("❌ Failed to send /release response: %v", err)
+					} else {
+						log.Printf("✅ /release response sent successfully")
+					}
 				case "status":
 					log.Printf("Processing /status command")
 					isRegistered := false
@@ -1131,7 +1144,7 @@ func (bm *BotManager) handleUpdates() {
 					}
 				default:
 					log.Printf("⚠️  Unknown command: /%s", command)
-					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /status или /about", command))
+					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /release, /status или /about", command))
 					if _, err := bm.bot.Send(msg); err != nil {
 						log.Printf("❌ Failed to send unknown command response: %v", err)
 					}
@@ -1308,7 +1321,7 @@ func main() {
 			"Коммит: %s\n\n"+
 			"Бот готов к работе. Используйте /start для списка команд.",
 			version, buildTime, commitHash)
-		
+
 		for chatID := range chats {
 			msg := tgbotapi.NewMessage(chatID, greetingMsg)
 			if _, err := bot.Send(msg); err != nil {
