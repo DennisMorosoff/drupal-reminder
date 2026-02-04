@@ -1216,10 +1216,15 @@ func (bm *BotManager) handleUpdates() {
 				chatType := update.Message.Chat.Type
 				log.Printf("🔧 Command received: /%s from chat %d", command, chatID)
 
-				// Немедленное подтверждение получения команды (чтобы было видно, что бот жив).
-				progressMessageID, err := bm.startProgress(bm.ctx, chatID, fmt.Sprintf("✅ Команда /%s получена\n⏳ Выполняю...", command))
+				// Немедленное подтверждение получения команды (отдельным сообщением, не редактируемым).
+				if _, err := bm.sendWithRetry(bm.ctx, tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Команда /%s получена", command))); err != nil {
+					log.Printf("❌ Failed to send command ack: %v", err)
+				}
+
+				// Отдельное прогресс-сообщение, которое будем редактировать по ходу выполнения.
+				progressMessageID, err := bm.startProgress(bm.ctx, chatID, fmt.Sprintf("⏳ Выполняю /%s...", command))
 				if err != nil {
-					log.Printf("❌ Failed to send initial command ack: %v", err)
+					log.Printf("❌ Failed to start progress message: %v", err)
 					progressMessageID = 0
 				}
 
