@@ -888,6 +888,17 @@ func (bm *BotManager) addChat(chatID int64) {
 
 // Обработка обновлений Telegram
 func (bm *BotManager) handleUpdates() {
+	// Удаляем webhook, если он был установлен, чтобы использовать long polling
+	deleteWebhookConfig := tgbotapi.DeleteWebhookConfig{
+		DropPendingUpdates: false,
+	}
+	_, err := bm.bot.Request(deleteWebhookConfig)
+	if err != nil {
+		log.Printf("⚠️  Failed to delete webhook (may not be set): %v", err)
+	} else {
+		log.Printf("✅ Webhook deleted, using long polling")
+	}
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	// Явно запрашиваем нужные типы апдейтов, чтобы стабильно получать события
