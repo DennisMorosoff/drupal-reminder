@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -82,6 +83,111 @@ type BotManager struct {
 	cancel           context.CancelFunc
 	stateMu          sync.Mutex
 	lastCheckTime    string
+}
+
+func (bm *BotManager) sendWithRetry(ctx context.Context, c tgbotapi.Chattable) (tgbotapi.Message, error) {
+	const maxAttempts = 5
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		msg, err := bm.bot.Send(c)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+
+		var tgErr *tgbotapi.Error
+		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters != nil && tgErr.ResponseParameters.RetryAfter > 0 {
+			wait := time.Duration(tgErr.ResponseParameters.RetryAfter+1) * time.Second
+			log.Printf("⚠️ Telegram rate limit (429), retry_after=%ds; waiting %s (attempt %d/%d)",
+				tgErr.ResponseParameters.RetryAfter, wait, attempt, maxAttempts)
+
+			select {
+			case <-time.After(wait):
+				continue
+			case <-ctx.Done():
+				return tgbotapi.Message{}, ctx.Err()
+			}
+		}
+
+		return tgbotapi.Message{}, err
+	}
+
+	return tgbotapi.Message{}, fmt.Errorf("telegram send: exceeded retries: %w", lastErr)
+}
+
+func (bm *BotManager) editWithRetry(ctx context.Context, cfg tgbotapi.EditMessageTextConfig) (tgbotapi.Message, error) {
+	const maxAttempts = 5
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		msg, err := bm.bot.Send(cfg)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+
+		var tgErr *tgbotapi.Error
+		if errors.As(err, &tgErr) && tgErr.Code == 429 && tgErr.ResponseParameters != nil && tgErr.ResponseParameters.RetryAfter > 0 {
+			wait := time.Duration(tgErr.ResponseParameters.RetryAfter+1) * time.Second
+			log.Printf("⚠️ Telegram rate limit (429) on edit, retry_after=%ds; waiting %s (attempt %d/%d)",
+				tgErr.ResponseParameters.RetryAfter, wait, attempt, maxAttempts)
+
+			select {
+			case <-time.After(wait):
+				continue
+			case <-ctx.Done():
+				return tgbotapi.Message{}, ctx.Err()
+			}
+		}
+
+		// Частый кейс: 400 "message is not modified" — считаем успехом.
+		if errors.As(err, &tgErr) && tgErr.Code == 400 && strings.Contains(strings.ToLower(tgErr.Message), "message is not modified") {
+			return tgbotapi.Message{}, nil
+		}
+
+		return tgbotapi.Message{}, err
+	}
+
+	return tgbotapi.Message{}, fmt.Errorf("telegram edit: exceeded retries: %w", lastErr)
+}
+
+func (bm *BotManager) startProgress(ctx context.Context, chatID int64, text string) (int, error) {
+	msg, err := bm.sendWithRetry(ctx, tgbotapi.NewMessage(chatID, text))
+	if err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
+// updateProgress пытается отредактировать прогресс-сообщение, а если не получилось — шлёт новое и обновляет messageID.
+func (bm *BotManager) updateProgress(ctx context.Context, chatID int64, messageID *int, text string) {
+	if messageID == nil {
+		return
+	}
+
+	if *messageID == 0 {
+		id, err := bm.startProgress(ctx, chatID, text)
+		if err != nil {
+			log.Printf("❌ Failed to start progress message: %v", err)
+			return
+		}
+		*messageID = id
+		return
+	}
+
+	edit := tgbotapi.NewEditMessageText(chatID, *messageID, text)
+	if _, err := bm.editWithRetry(ctx, edit); err == nil {
+		return
+	} else {
+		log.Printf("⚠️ Failed to edit progress message (fallback to new message): %v", err)
+		id, sendErr := bm.startProgress(ctx, chatID, text)
+		if sendErr != nil {
+			log.Printf("❌ Failed to send fallback progress message: %v", sendErr)
+			return
+		}
+		*messageID = id
+	}
 }
 
 func (bm *BotManager) persistState() error {
@@ -792,7 +898,7 @@ func (bm *BotManager) sendNotificationToAllChats(item RSSItem) {
 
 	for _, chatID := range chatIDs {
 		msg := tgbotapi.NewMessage(chatID, truncateToTelegramLimit(message))
-		if _, err := bm.bot.Send(msg); err != nil {
+		if _, err := bm.sendWithRetry(bm.ctx, msg); err != nil {
 			log.Printf("Failed to send notification to chat %d: %v", chatID, err)
 		}
 	}
@@ -819,7 +925,7 @@ func (bm *BotManager) sendNotificationToAllChatsWithPreview(item RSSItem, previe
 
 	for _, chatID := range chatIDs {
 		msg := tgbotapi.NewMessage(chatID, truncateToTelegramLimit(message))
-		if _, err := bm.bot.Send(msg); err != nil {
+		if _, err := bm.sendWithRetry(bm.ctx, msg); err != nil {
 			log.Printf("Failed to send notification to chat %d: %v", chatID, err)
 		}
 	}
@@ -833,13 +939,13 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 		photo.Caption = caption
 		photo.ParseMode = "HTML"
 
-		if _, err := bm.bot.Send(photo); err != nil {
+		if _, err := bm.sendWithRetry(bm.ctx, photo); err != nil {
 			log.Printf("❌ Failed to send photo to chat %d: %v", chatID, err)
 			// Fallback: отправляем текстовое сообщение
 			textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
 			msg := tgbotapi.NewMessage(chatID, textMsg)
 			msg.ParseMode = "HTML"
-			if _, msgErr := bm.bot.Send(msg); msgErr != nil {
+			if _, msgErr := bm.sendWithRetry(bm.ctx, msg); msgErr != nil {
 				log.Printf("❌ Failed to send fallback text message to chat %d: %v", chatID, msgErr)
 			} else {
 				log.Printf("✅ Sent fallback text message to chat %d", chatID)
@@ -854,7 +960,7 @@ func (bm *BotManager) sendLastArticleToChat(chatID int64, item RSSItem, imageURL
 	textMsg := fmt.Sprintf("<a href=\"%s\">%s</a>", item.Link, item.Title)
 	msg := tgbotapi.NewMessage(chatID, textMsg)
 	msg.ParseMode = "HTML"
-	if _, err := bm.bot.Send(msg); err != nil {
+	if _, err := bm.sendWithRetry(bm.ctx, msg); err != nil {
 		log.Printf("❌ Failed to send text message to chat %d: %v", chatID, err)
 	} else {
 		log.Printf("✅ Sent text message to chat %d", chatID)
@@ -941,13 +1047,6 @@ func (bm *BotManager) handleUpdates() {
 			log.Printf("📨 Message received: ChatID=%d, Type=%s, Text=%q, IsCommand=%t",
 				chatID, update.Message.Chat.Type, update.Message.Text, update.Message.IsCommand())
 
-			// Отправляем подтверждение получения сообщения в чат
-			statusMsg := fmt.Sprintf("✅ Получено сообщение\nChat ID: %d\nТип: %s\nТекст: %q\nКоманда: %t",
-				chatID, update.Message.Chat.Type, update.Message.Text, update.Message.IsCommand())
-			if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, statusMsg)); err != nil {
-				log.Printf("❌ Failed to send status message: %v", err)
-			}
-
 			if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
 				bm.addChat(chatID)
 			}
@@ -962,74 +1061,55 @@ func (bm *BotManager) handleUpdates() {
 						"Группа зарегистрирована.\n\nChat ID: %d\nТип чата: %s\n\nТеперь /check будет рассылать и сюда.",
 						fwdChat.ID, fwdChat.Type,
 					)
-					bm.bot.Send(tgbotapi.NewMessage(chatID, reply))
+					if _, err := bm.sendWithRetry(bm.ctx, tgbotapi.NewMessage(chatID, reply)); err != nil {
+						log.Printf("❌ Failed to send forward-register reply: %v", err)
+					}
 				}
 			}
 
 			if update.Message.IsCommand() {
 				command := update.Message.Command()
 				log.Printf("🔧 Command received: /%s from chat %d", command, chatID)
-
-				// Отправляем подтверждение получения команды
-				cmdStatusMsg := fmt.Sprintf("🔧 Команда получена: /%s\nОбрабатываю...", command)
-				if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, cmdStatusMsg)); err != nil {
-					log.Printf("❌ Failed to send command status: %v", err)
-				}
+				progressMessageID := 0
+				bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⏳ Обрабатываю /%s...", command))
 
 				switch command {
 				case "start":
 					log.Printf("Processing /start command")
 					bm.addChat(chatID)
-					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf(
 						"✅ Команда /start обработана!\n\nПривет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /release, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
-					if _, err := bm.bot.Send(msg); err != nil {
-						log.Printf("❌ Failed to send /start response: %v", err)
-					} else {
-						log.Printf("✅ /start response sent successfully")
-					}
 				case "fetch":
 					log.Printf("Processing /fetch command")
 					url := os.Getenv("DRUPAL_SITE_URL")
 					if url == "" {
-						if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, "❌ DRUPAL_SITE_URL is not set")); err != nil {
-							log.Printf("❌ Failed to send /fetch response: %v", err)
-						}
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "❌ DRUPAL_SITE_URL is not set")
 						continue
 					}
 
-					// Отправляем статус обработки
-					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("⏳ Загружаю контент с %s...", url))); err != nil {
-						log.Printf("❌ Failed to send /fetch status: %v", err)
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⏳ Загружаю контент с %s...", url))
 
 					content, err := bm.fetchWebsiteContent(url)
 					if err != nil {
-						if _, sendErr := bm.bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка при загрузке контента: "+err.Error())); sendErr != nil {
-							log.Printf("❌ Failed to send /fetch error: %v", sendErr)
-						}
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "❌ Ошибка при загрузке контента: "+err.Error())
 						continue
 					}
 
 					truncatedContent := truncateToTelegramLimit(content)
-					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, "✅ Контент загружен:\n\n"+truncatedContent)); err != nil {
-						log.Printf("❌ Failed to send /fetch response: %v", err)
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, truncateToTelegramLimit("✅ Контент загружен:\n\n"+truncatedContent))
 				case "check":
 					log.Printf("Command /check received from chat %d", chatID)
 					log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
 
-					// Отправляем статус начала обработки
-					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, "⏳ Получаю RSS-ленту...")); err != nil {
-						log.Printf("❌ Failed to send /check status: %v", err)
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, "⏳ Получаю RSS-ленту...")
 
 					feed, err := bm.fetchRSSFeed()
 					if err != nil {
 						log.Printf("❌ Failed to fetch RSS feed: %v", err)
 						errorMsg := fmt.Sprintf("❌ Ошибка при получении RSS-ленты: %s", err.Error())
-						bm.bot.Send(tgbotapi.NewMessage(chatID, errorMsg))
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, errorMsg)
 						continue
 					}
 
@@ -1037,14 +1117,11 @@ func (bm *BotManager) handleUpdates() {
 
 					if len(feed.Channel.Items) == 0 {
 						log.Printf("⚠️  No articles found in RSS feed")
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Нет статей в RSS-ленте"))
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "⚠️ Нет статей в RSS-ленте")
 						continue
 					}
 
-					// Отправляем статус о найденных статьях
-					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Найдено статей: %d\n⏳ Обрабатываю последнюю статью...", len(feed.Channel.Items)))); err != nil {
-						log.Printf("❌ Failed to send /check articles count: %v", err)
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("✅ Найдено статей: %d\n⏳ Обрабатываю последнюю статью...", len(feed.Channel.Items)))
 
 					// Берем только последнюю (первую в списке) статью
 					// ВАЖНО: последняя статья выводится в любом случае, даже если она уже выводилась в качестве уведомления
@@ -1078,6 +1155,7 @@ func (bm *BotManager) handleUpdates() {
 					// - в группе: только в текущей группе (без общей рассылки)
 					if update.Message.Chat.Type != "private" {
 						// Для групп/супергрупп не делаем broadcast
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "✅ Готово: отправил в этот чат")
 						continue
 					}
 
@@ -1092,12 +1170,15 @@ func (bm *BotManager) handleUpdates() {
 					bm.chatsMu.RUnlock()
 
 					if len(allChatIDs) > 0 {
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("📣 Рассылаю в %d чатов...", len(allChatIDs)))
 						log.Printf("Broadcasting /check (private) to %d additional chats: %v", len(allChatIDs), allChatIDs)
 						for _, targetChatID := range allChatIDs {
 							bm.sendLastArticleToChat(targetChatID, item, imageURL)
 						}
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("✅ Готово: отправил в %d чатов", len(allChatIDs)+1))
 					} else {
 						log.Printf("No additional chats to broadcast to")
+						bm.updateProgress(bm.ctx, chatID, &progressMessageID, "✅ Готово: других чатов для рассылки нет")
 					}
 				case "release":
 					log.Printf("Processing /release command")
@@ -1106,12 +1187,7 @@ func (bm *BotManager) handleUpdates() {
 						"Дата сборки: %s\n"+
 						"Коммит: %s",
 						version, buildTime, commitHash)
-					msg := tgbotapi.NewMessage(chatID, releaseInfo)
-					if _, err := bm.bot.Send(msg); err != nil {
-						log.Printf("❌ Failed to send /release response: %v", err)
-					} else {
-						log.Printf("✅ /release response sent successfully")
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, releaseInfo)
 				case "status":
 					log.Printf("Processing /status command")
 					isRegistered := false
@@ -1124,11 +1200,7 @@ func (bm *BotManager) handleUpdates() {
 						"✅ Команда /status обработана!\n\n📊 Статус:\nChat ID: %d\nТип чата: %s\nЗарегистрирован: %t\nВсего чатов в базе: %d",
 						chatID, update.Message.Chat.Type, isRegistered, totalChats,
 					)
-					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, text)); err != nil {
-						log.Printf("❌ Failed to send /status response: %v", err)
-					} else {
-						log.Printf("✅ /status response sent successfully")
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, text)
 				case "about":
 					log.Printf("Processing /about command")
 					versionInfo := fmt.Sprintf("✅ Команда /about обработана!\n\n🤖 Drupal Reminder Bot\n\n"+
@@ -1136,29 +1208,21 @@ func (bm *BotManager) handleUpdates() {
 						"Сборка: %s\n"+
 						"Коммит: %s",
 						version, buildTime, commitHash)
-					msg := tgbotapi.NewMessage(chatID, versionInfo)
-					if _, err := bm.bot.Send(msg); err != nil {
-						log.Printf("❌ Failed to send /about response: %v", err)
-					} else {
-						log.Printf("✅ /about response sent successfully")
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, versionInfo)
 				default:
 					log.Printf("⚠️  Unknown command: /%s", command)
-					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /release, /status или /about", command))
-					if _, err := bm.bot.Send(msg); err != nil {
-						log.Printf("❌ Failed to send unknown command response: %v", err)
-					}
+					bm.updateProgress(bm.ctx, chatID, &progressMessageID, fmt.Sprintf("⚠️ Неизвестная команда: /%s\n\nПопробуйте: /start, /fetch, /check, /release, /status или /about", command))
 				}
 			} else if update.Message.Text != "" {
 				log.Printf("📝 Non-command text message received: %q", update.Message.Text)
 				msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("📝 Получен текст: %q\n\nИзвините, я обрабатываю только команды. Используйте /start для списка команд.", update.Message.Text))
-				if _, err := bm.bot.Send(msg); err != nil {
+				if _, err := bm.sendWithRetry(bm.ctx, msg); err != nil {
 					log.Printf("❌ Failed to send text response: %v", err)
 				}
 			} else {
 				log.Printf("📨 Message received but no text or command (type: %T)", update.Message)
 				msg := tgbotapi.NewMessage(chatID, "📨 Получено сообщение без текста или команды")
-				if _, err := bm.bot.Send(msg); err != nil {
+				if _, err := bm.sendWithRetry(bm.ctx, msg); err != nil {
 					log.Printf("❌ Failed to send empty message response: %v", err)
 				}
 			}
@@ -1324,7 +1388,7 @@ func main() {
 
 		for chatID := range chats {
 			msg := tgbotapi.NewMessage(chatID, greetingMsg)
-			if _, err := bot.Send(msg); err != nil {
+			if _, err := bm.sendWithRetry(ctx, msg); err != nil {
 				log.Printf("⚠️  Failed to send startup greeting to chat %d: %v", chatID, err)
 			} else {
 				log.Printf("✅ Startup greeting sent to chat %d", chatID)
