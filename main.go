@@ -889,14 +889,15 @@ func (bm *BotManager) addChat(chatID int64) {
 // Обработка обновлений Telegram
 func (bm *BotManager) handleUpdates() {
 	// Удаляем webhook, если он был установлен, чтобы использовать long polling
+	// DropPendingUpdates: true - очищаем старые обновления, чтобы начать с чистого листа
 	deleteWebhookConfig := tgbotapi.DeleteWebhookConfig{
-		DropPendingUpdates: false,
+		DropPendingUpdates: true,
 	}
 	_, err := bm.bot.Request(deleteWebhookConfig)
 	if err != nil {
 		log.Printf("⚠️  Failed to delete webhook (may not be set): %v", err)
 	} else {
-		log.Printf("✅ Webhook deleted, using long polling")
+		log.Printf("✅ Webhook deleted, pending updates dropped, using long polling")
 	}
 
 	u := tgbotapi.NewUpdate(0)
@@ -904,18 +905,25 @@ func (bm *BotManager) handleUpdates() {
 	// Явно запрашиваем нужные типы апдейтов, чтобы стабильно получать события
 	// о добавлении/удалении бота из групп (my_chat_member) и сообщения (message).
 	u.AllowedUpdates = []string{"message", "my_chat_member"}
+	log.Printf("📡 Configuring updates: Timeout=%d, AllowedUpdates=%v", u.Timeout, u.AllowedUpdates)
 
 	updatesChan := bm.bot.GetUpdatesChan(u)
+	log.Printf("✅ Updates channel created, waiting for updates...")
+	log.Printf("💬 Bot is now listening for commands. Try sending /start to test.")
 
 	for update := range updatesChan {
+		log.Printf("📥 Received update: UpdateID=%d", update.UpdateID)
+		
 		select {
 		case <-bm.ctx.Done():
+			log.Printf("Context cancelled, stopping updates handler")
 			return
 		default:
 		}
 
 		// Обработка добавления бота в группу
 		if update.MyChatMember != nil {
+			log.Printf("📥 MyChatMember update received")
 			member := update.MyChatMember
 			if member.NewChatMember.User != nil {
 				if member.NewChatMember.User.ID == bm.bot.Self.ID {
@@ -930,6 +938,9 @@ func (bm *BotManager) handleUpdates() {
 		// Обработка сообщений в группах (для регистрации чата)
 		if update.Message != nil {
 			chatID := update.Message.Chat.ID
+			log.Printf("📨 Message received: ChatID=%d, Type=%s, Text=%q, IsCommand=%t", 
+				chatID, update.Message.Chat.Type, update.Message.Text, update.Message.IsCommand())
+			
 			if update.Message.Chat.Type == "group" || update.Message.Chat.Type == "supergroup" {
 				bm.addChat(chatID)
 			}
@@ -949,29 +960,44 @@ func (bm *BotManager) handleUpdates() {
 			}
 
 			if update.Message.IsCommand() {
-				switch update.Message.Command() {
+				command := update.Message.Command()
+				log.Printf("🔧 Command received: /%s from chat %d", command, chatID)
+				
+				switch command {
 				case "start":
+					log.Printf("Processing /start command")
 					bm.addChat(chatID)
 					msg := tgbotapi.NewMessage(chatID, fmt.Sprintf(
 						"Привет! Я бот для уведомлений о новых статьях.\n\nChat ID: %d\nТип чата: %s\n\nКоманды: /check, /about, /status",
 						chatID, update.Message.Chat.Type,
 					))
-					bm.bot.Send(msg)
+					if _, err := bm.bot.Send(msg); err != nil {
+						log.Printf("❌ Failed to send /start response: %v", err)
+					} else {
+						log.Printf("✅ /start response sent successfully")
+					}
 				case "fetch":
+					log.Printf("Processing /fetch command")
 					url := os.Getenv("DRUPAL_SITE_URL")
 					if url == "" {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "DRUPAL_SITE_URL is not set"))
+						if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, "DRUPAL_SITE_URL is not set")); err != nil {
+							log.Printf("❌ Failed to send /fetch response: %v", err)
+						}
 						continue
 					}
 
 					content, err := bm.fetchWebsiteContent(url)
 					if err != nil {
-						bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch website content: "+err.Error()))
+						if _, sendErr := bm.bot.Send(tgbotapi.NewMessage(chatID, "Failed to fetch website content: "+err.Error())); sendErr != nil {
+							log.Printf("❌ Failed to send /fetch error: %v", sendErr)
+						}
 						continue
 					}
 
 					truncatedContent := truncateToTelegramLimit(content)
-					bm.bot.Send(tgbotapi.NewMessage(chatID, truncatedContent))
+					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, truncatedContent)); err != nil {
+						log.Printf("❌ Failed to send /fetch response: %v", err)
+					}
 				case "check":
 					log.Printf("Command /check received from chat %d", chatID)
 					log.Printf("Fetching RSS feed with auth method: %s", bm.authMethod)
@@ -1046,6 +1072,7 @@ func (bm *BotManager) handleUpdates() {
 						log.Printf("No additional chats to broadcast to")
 					}
 				case "status":
+					log.Printf("Processing /status command")
 					isRegistered := false
 					bm.chatsMu.RLock()
 					isRegistered = bm.chats[chatID]
@@ -1056,22 +1083,39 @@ func (bm *BotManager) handleUpdates() {
 						"Статус\n\nChat ID: %d\nТип чата: %s\nЗарегистрирован: %t\nВсего чатов в базе: %d",
 						chatID, update.Message.Chat.Type, isRegistered, totalChats,
 					)
-					bm.bot.Send(tgbotapi.NewMessage(chatID, text))
+					if _, err := bm.bot.Send(tgbotapi.NewMessage(chatID, text)); err != nil {
+						log.Printf("❌ Failed to send /status response: %v", err)
+					} else {
+						log.Printf("✅ /status response sent successfully")
+					}
 				case "about":
+					log.Printf("Processing /about command")
 					versionInfo := fmt.Sprintf("🤖 Drupal Reminder Bot\n\n"+
 						"Версия: %s\n"+
 						"Сборка: %s\n"+
 						"Коммит: %s",
 						version, buildTime, commitHash)
 					msg := tgbotapi.NewMessage(chatID, versionInfo)
-					bm.bot.Send(msg)
+					if _, err := bm.bot.Send(msg); err != nil {
+						log.Printf("❌ Failed to send /about response: %v", err)
+					} else {
+						log.Printf("✅ /about response sent successfully")
+					}
 				default:
+					log.Printf("⚠️  Unknown command: /%s", command)
 					msg := tgbotapi.NewMessage(chatID, "Unknown command. Try /start, /fetch, /check or /about")
-					bm.bot.Send(msg)
+					if _, err := bm.bot.Send(msg); err != nil {
+						log.Printf("❌ Failed to send unknown command response: %v", err)
+					}
 				}
 			} else if update.Message.Text != "" {
+				log.Printf("📝 Non-command text message received: %q", update.Message.Text)
 				msg := tgbotapi.NewMessage(chatID, "Извините, я обрабатываю только команды.")
-				bm.bot.Send(msg)
+				if _, err := bm.bot.Send(msg); err != nil {
+					log.Printf("❌ Failed to send text response: %v", err)
+				}
+			} else {
+				log.Printf("📨 Message received but no text or command (type: %T)", update.Message)
 			}
 		}
 	}
