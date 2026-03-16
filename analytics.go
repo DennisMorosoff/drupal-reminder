@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const sleepTableSlot = 30 * time.Minute
+
 type NapInsight struct {
 	NapIndex         int
 	Duration         time.Duration
@@ -190,8 +192,28 @@ func BuildDashboardReport(childName string, sessions []SleepSession, active *Sle
 
 	monthCount, monthTotal, monthAverage := SummarizeRange(sessions, now, 30, loc)
 	blocks = append(blocks, fmt.Sprintf("За 30 дней: %d снов, всего %s, средняя длительность %s.", monthCount, formatDurationRU(monthTotal), formatDurationRU(monthAverage)))
+	blocks = append(blocks, BuildSleepTableSection(sessionsWithActive(sessions, active, now), now, 1, loc))
 
 	return strings.Join(blocks, "\n\n")
+}
+
+func BuildDayReport(sessions []SleepSession, active *SleepSession, day time.Time, loc *time.Location) string {
+	summary := SummarizeDay(sessions, day, loc)
+	table := BuildSleepTableSection(sessionsWithActive(sessions, active, day), day, 1, loc)
+	return strings.Join([]string{
+		formatDaySummary("Сегодня", summary),
+		table,
+	}, "\n\n")
+}
+
+func BuildRangeReport(sessions []SleepSession, active *SleepSession, end time.Time, days int, loc *time.Location) string {
+	count, total, average := SummarizeRange(sessions, end, days, loc)
+	summary := fmt.Sprintf("За %d дней: %d снов, всего %s, средняя длительность %s.", days, count, formatDurationRU(total), formatDurationRU(average))
+	table := BuildSleepTableSection(sessionsWithActive(sessions, active, end), end, days, loc)
+	return strings.Join([]string{
+		summary,
+		table,
+	}, "\n\n")
 }
 
 func formatDaySummary(label string, summary DaySummary) string {
@@ -261,4 +283,90 @@ func ordinalNap(index int) string {
 		return label
 	}
 	return fmt.Sprintf("%d-й", index)
+}
+
+func BuildSleepTableSection(sessions []SleepSession, end time.Time, days int, loc *time.Location) string {
+	if days < 1 {
+		days = 1
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Таблица сна за %d дн. (`#` = сон, `.` = нет; 1 символ = 30 мин):", days),
+		wrapCodeBlock(BuildSleepTable(sessions, end, days, loc)),
+	}, "\n")
+}
+
+func BuildSleepTable(sessions []SleepSession, end time.Time, days int, loc *time.Location) string {
+	if days < 1 {
+		days = 1
+	}
+
+	endDay := startOfDay(end, loc)
+	startDay := endDay.AddDate(0, 0, -(days - 1))
+
+	lines := []string{buildSleepTableHeader()}
+	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
+		lines = append(lines, buildSleepTableRow(day, sessions, loc))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildSleepTableHeader() string {
+	groups := make([]string, 0, 24)
+	for hour := 0; hour < 24; hour++ {
+		groups = append(groups, fmt.Sprintf("%02d", hour))
+	}
+	return "дата  " + strings.Join(groups, " ")
+}
+
+func buildSleepTableRow(day time.Time, sessions []SleepSession, loc *time.Location) string {
+	groups := make([]string, 0, 24)
+	dayStart := startOfDay(day, loc)
+	for hour := 0; hour < 24; hour++ {
+		cells := []byte{'.', '.'}
+		for half := 0; half < 2; half++ {
+			slotStart := dayStart.Add(time.Duration(hour*2+half) * sleepTableSlot)
+			slotEnd := slotStart.Add(sleepTableSlot)
+			if hasSleepOverlap(sessions, slotStart, slotEnd, loc) {
+				cells[half] = '#'
+			}
+		}
+		groups = append(groups, string(cells))
+	}
+	return fmt.Sprintf("%s  %s", dayStart.Format("02.01"), strings.Join(groups, " "))
+}
+
+func hasSleepOverlap(sessions []SleepSession, slotStart time.Time, slotEnd time.Time, loc *time.Location) bool {
+	for _, session := range sessions {
+		if session.EndAt == nil {
+			continue
+		}
+		startAt := session.StartAt.In(loc)
+		endAt := session.EndAt.In(loc)
+		if startAt.Before(slotEnd) && endAt.After(slotStart) {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionsWithActive(sessions []SleepSession, active *SleepSession, now time.Time) []SleepSession {
+	merged := append([]SleepSession(nil), sessions...)
+	if active == nil {
+		return merged
+	}
+
+	session := *active
+	endAt := now
+	session.EndAt = &endAt
+	merged = append(merged, session)
+	return merged
+}
+
+func wrapCodeBlock(text string) string {
+	return "```\n" + text + "\n```"
+}
+
+func startOfDay(value time.Time, loc *time.Location) time.Time {
+	local := value.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 }

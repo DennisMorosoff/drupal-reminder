@@ -526,21 +526,29 @@ func (b *SleepBot) sendDashboard(ctx context.Context, userCtx UserContext, chatI
 
 func (b *SleepBot) sendDayReport(ctx context.Context, userCtx UserContext, chatID int64) error {
 	loc := b.mustLocation(userCtx.Family.Timezone)
+	active, err := b.store.GetActiveSleep(ctx, userCtx.Child.ID)
+	if err != nil {
+		return err
+	}
 	sessions, err := b.store.ListCompletedSleepsSince(ctx, userCtx.Child.ID, time.Now().UTC().AddDate(0, 0, -2))
 	if err != nil {
 		return err
 	}
-	summary := SummarizeDay(sessions, time.Now().In(loc), loc)
-	return b.sendText(chatID, formatDaySummary("Сегодня", summary))
+	report := BuildDayReport(sessions, active, time.Now().In(loc), loc)
+	return b.sendText(chatID, report)
 }
 
 func (b *SleepBot) sendRangeReport(ctx context.Context, userCtx UserContext, chatID int64, days int) error {
+	active, err := b.store.GetActiveSleep(ctx, userCtx.Child.ID)
+	if err != nil {
+		return err
+	}
 	sessions, err := b.store.ListCompletedSleepsSince(ctx, userCtx.Child.ID, time.Now().UTC().AddDate(0, 0, -(days+2)))
 	if err != nil {
 		return err
 	}
-	count, total, average := SummarizeRange(sessions, time.Now(), days, b.mustLocation(userCtx.Family.Timezone))
-	return b.sendText(chatID, fmt.Sprintf("За %d дней: %d снов, всего %s, средняя длительность %s.", days, count, formatDurationRU(total), formatDurationRU(average)))
+	report := BuildRangeReport(sessions, active, time.Now(), days, b.mustLocation(userCtx.Family.Timezone))
+	return b.sendText(chatID, report)
 }
 
 func (b *SleepBot) sendSettings(ctx context.Context, userCtx UserContext, chatID int64) error {

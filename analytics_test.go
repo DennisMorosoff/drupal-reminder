@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,5 +50,63 @@ func TestParseSleepRange(t *testing.T) {
 	}
 	if endAt.In(loc).Hour() != 12 || endAt.In(loc).Minute() != 35 {
 		t.Fatalf("unexpected end time: %s", endAt.In(loc))
+	}
+}
+
+func TestBuildSleepTableRowMarksHalfHourSlots(t *testing.T) {
+	loc := time.FixedZone("UTC+3", 3*60*60)
+	day := time.Date(2026, 3, 16, 0, 0, 0, 0, loc)
+
+	makeSession := func(startHour int, startMinute int, endHour int, endMinute int) SleepSession {
+		start := time.Date(day.Year(), day.Month(), day.Day(), startHour, startMinute, 0, 0, loc).UTC()
+		end := time.Date(day.Year(), day.Month(), day.Day(), endHour, endMinute, 0, 0, loc).UTC()
+		return SleepSession{StartAt: start, EndAt: &end}
+	}
+
+	row := buildSleepTableRow(day, []SleepSession{
+		makeSession(1, 0, 1, 30),
+		makeSession(2, 30, 2, 40),
+	}, loc)
+
+	if !strings.HasPrefix(row, "16.03  .. #. .#") {
+		t.Fatalf("unexpected row prefix: %s", row)
+	}
+}
+
+func TestBuildSleepTableRowSplitsSleepAcrossMidnight(t *testing.T) {
+	loc := time.FixedZone("UTC+3", 3*60*60)
+	day := time.Date(2026, 3, 16, 0, 0, 0, 0, loc)
+	start := time.Date(2026, 3, 16, 23, 30, 0, 0, loc).UTC()
+	end := time.Date(2026, 3, 17, 0, 20, 0, 0, loc).UTC()
+	session := SleepSession{StartAt: start, EndAt: &end}
+
+	firstRow := buildSleepTableRow(day, []SleepSession{session}, loc)
+	secondRow := buildSleepTableRow(day.AddDate(0, 0, 1), []SleepSession{session}, loc)
+
+	if !strings.HasSuffix(firstRow, " .. .#") {
+		t.Fatalf("expected last slot on first day to be filled, got %s", firstRow)
+	}
+	if !strings.HasPrefix(secondRow, "17.03  #. ..") {
+		t.Fatalf("expected first slot on second day to be filled, got %s", secondRow)
+	}
+}
+
+func TestBuildRangeReportIncludesSleepTable(t *testing.T) {
+	loc := time.FixedZone("UTC+3", 3*60*60)
+	end := time.Date(2026, 3, 16, 12, 0, 0, 0, loc)
+	start := time.Date(2026, 3, 16, 1, 0, 0, 0, loc).UTC()
+	finish := time.Date(2026, 3, 16, 2, 0, 0, 0, loc).UTC()
+	sessions := []SleepSession{{ID: 1, StartAt: start, EndAt: &finish}}
+
+	report := BuildRangeReport(sessions, nil, end, 1, loc)
+
+	if !strings.Contains(report, "Таблица сна за 1 дн.") {
+		t.Fatalf("expected sleep table heading, got %s", report)
+	}
+	if !strings.Contains(report, "```") {
+		t.Fatalf("expected markdown code block, got %s", report)
+	}
+	if !strings.Contains(report, "16.03  .. ##") {
+		t.Fatalf("expected sleep cells in table, got %s", report)
 	}
 }
