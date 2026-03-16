@@ -1,9 +1,9 @@
 @echo off
-REM Скрипт сборки Drupal Reminder Bot с автоматическим определением версии из git
+REM Скрипт сборки Baby Sleep Tracker Bot с автоматическим определением версии из git
 
 setlocal enabledelayedexpansion
 
-echo Building Drupal Reminder Bot...
+echo Building Baby Sleep Tracker Bot...
 echo.
 
 REM Определение версии из git тегов
@@ -28,12 +28,12 @@ echo Commit: %COMMIT%
 echo.
 
 REM Сборка с установкой версии через ldflags
-go build -ldflags "-X main.version=%VERSION% -X main.buildTime=%BUILD_TIME% -X main.commitHash=%COMMIT%" -o drupal-reminder-bot.exe main.go
+go build -ldflags "-X main.version=%VERSION% -X main.buildTime=%BUILD_TIME% -X main.commitHash=%COMMIT%" -o sleepbot.exe .
 
 if %ERRORLEVEL% EQU 0 (
     echo.
     echo Build completed successfully!
-    echo Binary: drupal-reminder-bot.exe
+    echo Binary: sleepbot.exe
 ) else (
     echo.
     echo Build failed!
