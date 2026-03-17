@@ -130,6 +130,7 @@ func (b *SleepBot) handleMessage(ctx context.Context, msg *tgbotapi.Message) err
 	}
 
 	if msg.IsCommand() {
+		_ = b.store.ClearUserState(ctx, msg.From.ID)
 		return b.handleCommand(ctx, userCtx, msg)
 	}
 	return b.handleText(ctx, userCtx, msg)
@@ -250,7 +251,11 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateAwaitingEditLast, pendingActionPayload{}); err != nil {
 			return err
 		}
-		return b.sendText(msg.Chat.ID, "Отправьте новый интервал последнего сна: `11:10 - 12:35` или `16.03 11:10 - 16.03 12:35`.")
+		editMsg, err := b.editLastSleepMessage(ctx, userCtx)
+		if err != nil {
+			return err
+		}
+		return b.sendText(msg.Chat.ID, editMsg)
 	case "cancel":
 		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
 			return err
@@ -288,12 +293,16 @@ func (b *SleepBot) handleText(ctx context.Context, userCtx UserContext, msg *tgb
 		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateAwaitingManualSleep, pendingActionPayload{}); err != nil {
 			return err
 		}
-		return b.sendText(msg.Chat.ID, "Отправьте интервал сна: `11:10 - 12:35` или `16.03 11:10 - 16.03 12:35`.")
+		return b.sendText(msg.Chat.ID, "Отправьте интервал сна: `11:10 - 12:35` или `16.03 11:10 - 16.03 12:35`.\n"+b.localTimeHint(userCtx))
 	case "Исправить последний сон":
 		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateAwaitingEditLast, pendingActionPayload{}); err != nil {
 			return err
 		}
-		return b.sendText(msg.Chat.ID, "Отправьте новый интервал для последнего сна.")
+		editMsg, err := b.editLastSleepMessage(ctx, userCtx)
+		if err != nil {
+			return err
+		}
+		return b.sendText(msg.Chat.ID, editMsg)
 	case "Отчеты":
 		return b.sendDashboard(ctx, userCtx, msg.Chat.ID)
 	case "Напоминания":
@@ -708,6 +717,24 @@ func (b *SleepBot) mustLocation(name string) *time.Location {
 		loc, _ = time.LoadLocation(b.cfg.DefaultTimezone)
 	}
 	return loc
+}
+
+func (b *SleepBot) localTimeHint(userCtx UserContext) string {
+	return "Время в вашей таймзоне: `" + userCtx.Family.Timezone + "`"
+}
+
+func (b *SleepBot) editLastSleepMessage(ctx context.Context, userCtx UserContext) (string, error) {
+	last, err := b.store.GetLastCompletedSleep(ctx, userCtx.Child.ID)
+	if err != nil {
+		return "", err
+	}
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	msg := "Отправьте новый интервал для последнего сна."
+	if last != nil && last.EndAt != nil {
+		msg += "\nТекущее значение: `" + formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc) + "`"
+	}
+	msg += "\n" + b.localTimeHint(userCtx)
+	return msg, nil
 }
 
 func fullName(user *tgbotapi.User) string {
