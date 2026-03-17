@@ -42,7 +42,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("sleep bot started as @%s (%s, %s, %s)", botAPI.Self.UserName, version, buildTime, commitHash)
+	log.Printf("sleep bot started as @%s (version=%s, build_time=%s, commit=%s)", botAPI.Self.UserName, version, buildTime, commitHash)
 
 	bot := NewSleepBot(botAPI, store, cfg)
 
