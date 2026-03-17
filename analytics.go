@@ -389,3 +389,286 @@ func startOfDay(value time.Time, loc *time.Location) time.Time {
 	local := value.In(loc)
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 }
+
+type SleepNorm struct {
+	TotalMin  float64
+	TotalMax  float64
+	DayMin    float64
+	DayMax    float64
+	NightMin  float64
+	NightMax  float64
+}
+
+type NormSystemResult struct {
+	SystemID string
+	Band     string
+	Norm     SleepNorm
+	Actual   struct {
+		Total float64
+		Day   float64
+		Night float64
+	}
+	Delta struct {
+		TotalPercent float64
+		DayPercent   float64
+		NightPercent float64
+		Score        float64
+	}
+	Category string
+}
+
+var sleepNormsA = map[string]SleepNorm{
+	"0-1": {TotalMin: 16, TotalMax: 20, DayMin: 7, DayMax: 9, NightMin: 9, NightMax: 11},
+	"1-2": {TotalMin: 15, TotalMax: 18, DayMin: 6, DayMax: 8, NightMin: 9, NightMax: 11},
+	"2-3": {TotalMin: 15, TotalMax: 17, DayMin: 5, DayMax: 7, NightMin: 9, NightMax: 10},
+	"3-4": {TotalMin: 14, TotalMax: 16, DayMin: 4, DayMax: 5.5, NightMin: 9, NightMax: 10.5},
+	"4-6": {TotalMin: 13, TotalMax: 15, DayMin: 3, DayMax: 4.5, NightMin: 9, NightMax: 11},
+}
+
+var sleepNormsB = map[string]SleepNorm{
+	"0-1": {TotalMin: 14, TotalMax: 17, DayMin: 7, DayMax: 9, NightMin: 7, NightMax: 9},
+	"1-2": {TotalMin: 14, TotalMax: 17, DayMin: 6, DayMax: 8, NightMin: 8, NightMax: 9},
+	"2-3": {TotalMin: 14, TotalMax: 17, DayMin: 5, DayMax: 7, NightMin: 9, NightMax: 10},
+	"3-4": {TotalMin: 12, TotalMax: 16, DayMin: 4, DayMax: 5, NightMin: 8, NightMax: 10},
+	"4-6": {TotalMin: 12, TotalMax: 15, DayMin: 3, DayMax: 4.5, NightMin: 9, NightMax: 10.5},
+}
+
+var sleepNormsC = map[string]SleepNorm{
+	"0-3": {TotalMin: 14, TotalMax: 17, DayMin: 6, DayMax: 9, NightMin: 8, NightMax: 11},
+	"3-6": {TotalMin: 12, TotalMax: 16, DayMin: 3, DayMax: 5, NightMin: 9, NightMax: 11},
+}
+
+func ageBandA(ageMonths float64) string {
+	switch {
+	case ageMonths < 1:
+		return "0-1"
+	case ageMonths < 2:
+		return "1-2"
+	case ageMonths < 3:
+		return "2-3"
+	case ageMonths < 4:
+		return "3-4"
+	default:
+		return "4-6"
+	}
+}
+
+func ageBandB(ageMonths float64) string {
+	return ageBandA(ageMonths)
+}
+
+func ageBandC(ageMonths float64) string {
+	if ageMonths < 3 {
+		return "0-3"
+	}
+	return "3-6"
+}
+
+func deviationPercent(value float64, min float64, max float64) float64 {
+	if value >= min && value <= max {
+		return 0
+	}
+	if value < min {
+		if min == 0 {
+			return 0
+		}
+		return (min - value) / min * -100
+	}
+	if max == 0 {
+		return 0
+	}
+	return (value - max) / max * 100
+}
+
+func categoryByScore(score float64) string {
+	switch {
+	case score <= 10:
+		return "В пределах нормы"
+	case score <= 25:
+		return "Лёгкое отклонение"
+	case score <= 40:
+		return "Заметное отклонение"
+	default:
+		return "Сильное отклонение"
+	}
+}
+
+func evaluateSystem(systemID string, norms map[string]SleepNorm, band string, dayHours float64, nightHours float64) NormSystemResult {
+	norm := norms[band]
+	total := dayHours + nightHours
+
+	deltaTotal := deviationPercent(total, norm.TotalMin, norm.TotalMax)
+	deltaDay := deviationPercent(dayHours, norm.DayMin, norm.DayMax)
+	deltaNight := deviationPercent(nightHours, norm.NightMin, norm.NightMax)
+
+	score := 0.5*absFloat(deltaTotal) + 0.25*absFloat(deltaDay) + 0.25*absFloat(deltaNight)
+
+	var res NormSystemResult
+	res.SystemID = systemID
+	res.Band = band
+	res.Norm = norm
+	res.Actual.Total = total
+	res.Actual.Day = dayHours
+	res.Actual.Night = nightHours
+	res.Delta.TotalPercent = deltaTotal
+	res.Delta.DayPercent = deltaDay
+	res.Delta.NightPercent = deltaNight
+	res.Delta.Score = score
+	res.Category = categoryByScore(score)
+	return res
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func splitDayNightLast24h(sessions []SleepSession, now time.Time, loc *time.Location) (time.Duration, time.Duration) {
+	var (
+		dayTotal   time.Duration
+		nightTotal time.Duration
+	)
+	since := now.Add(-24 * time.Hour)
+
+	for _, session := range sessions {
+		if session.EndAt == nil {
+			continue
+		}
+		start := session.StartAt.In(loc)
+		end := session.EndAt.In(loc)
+		if end.Before(since) || start.After(now) {
+			continue
+		}
+		if start.Before(since) {
+			start = since
+		}
+		if end.After(now) {
+			end = now
+		}
+		if !end.After(start) {
+			continue
+		}
+
+		total := end.Sub(start)
+		dayTotal += overlapWithDayWindow(start, end, loc)
+		nightTotal += total - overlapWithDayWindow(start, end, loc)
+	}
+
+	return dayTotal, nightTotal
+}
+
+func overlapWithDayWindow(start time.Time, end time.Time, loc *time.Location) time.Duration {
+	const dayStartHour = 7
+	const dayEndHour = 19
+
+	var total time.Duration
+	current := start
+	for current.Before(end) {
+		dayStart := time.Date(current.Year(), current.Month(), current.Day(), dayStartHour, 0, 0, 0, loc)
+		dayEnd := time.Date(current.Year(), current.Month(), current.Day(), dayEndHour, 0, 0, 0, loc)
+		if dayEnd.Before(dayStart) {
+			dayEnd = dayStart
+		}
+
+		windowStart := maxTime(dayStart, start)
+		windowEnd := minTime(dayEnd, end)
+
+		if windowEnd.After(windowStart) {
+			total += windowEnd.Sub(windowStart)
+		}
+
+		current = time.Date(current.Year(), current.Month(), current.Day()+1, 0, 0, 0, 0, loc)
+	}
+	return total
+}
+
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func childAgeMonths(child Child, now time.Time) (float64, bool) {
+	if child.BirthDate == nil {
+		return 0, false
+	}
+	age := now.Sub(*child.BirthDate)
+	if age <= 0 {
+		return 0, false
+	}
+	days := age.Hours() / 24
+	months := days / 30.4375
+	return months, true
+}
+
+func BuildNormsReport(child Child, sessions []SleepSession, loc *time.Location, now time.Time) string {
+	ageMonths, ok := childAgeMonths(child, now.In(loc))
+	if !ok {
+		return "Возраст ребенка неизвестен или некорректен. Укажите дату рождения через `/setbirthdate`, чтобы оценивать сон относительно норм для возраста до 6 месяцев."
+	}
+	if ageMonths > 6 {
+		return "Эта оценка рассчитана для детей до 6 месяцев. Сейчас возраст ребенка больше 6 месяцев, поэтому используйте обычные отчеты или проконсультируйтесь с педиатром."
+	}
+
+	dayDur, nightDur := splitDayNightLast24h(sessions, now, loc)
+	if dayDur == 0 && nightDur == 0 {
+		return "За последние 24 часа нет сохраненных снов, поэтому оценка относительно норм пока недоступна."
+	}
+
+	dayHours := dayDur.Hours()
+	nightHours := nightDur.Hours()
+
+	bandA := ageBandA(ageMonths)
+	bandB := ageBandB(ageMonths)
+	bandC := ageBandC(ageMonths)
+
+	resA := evaluateSystem("A", sleepNormsA, bandA, dayHours, nightHours)
+	resB := evaluateSystem("B", sleepNormsB, bandB, dayHours, nightHours)
+	resC := evaluateSystem("C", sleepNormsC, bandC, dayHours, nightHours)
+
+	avgScore := (resA.Delta.Score + resB.Delta.Score + resC.Delta.Score) / 3
+	overallCategory := categoryByScore(avgScore)
+
+	lines := []string{
+		fmt.Sprintf("Оценка сна %s за последние 24 часа:", child.Name),
+		fmt.Sprintf("**Сводка:** в среднем по 3 системам — *%s* (среднее отклонение %.1f%%).", overallCategory, avgScore),
+		"",
+		formatSystemBlock(resA, "Система A (русская таблица)"),
+		"",
+		formatSystemBlock(resB, "Система B (Sleep Foundation)"),
+		"",
+		formatSystemBlock(resC, "Система C (международные рекомендации)"),
+		"",
+		"Это ориентировочная оценка по открытым педиатрическим источникам и не является медицинским диагнозом. При заметных отклонениях или беспокойстве по поводу сна ребенка обсудите режим с педиатром или детским сомнологом.",
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func formatSystemBlock(res NormSystemResult, title string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("**%s** (возрастная группа %s)", title, res.Band),
+		fmt.Sprintf("Норма: всего %.1f–%.1f ч, день %.1f–%.1f ч, ночь %.1f–%.1f ч.",
+			res.Norm.TotalMin, res.Norm.TotalMax,
+			res.Norm.DayMin, res.Norm.DayMax,
+			res.Norm.NightMin, res.Norm.NightMax,
+		),
+		fmt.Sprintf("У вас: всего %.1f ч (%.1f%%), день %.1f ч (%.1f%%), ночь %.1f ч (%.1f%%).",
+			res.Actual.Total, res.Delta.TotalPercent,
+			res.Actual.Day, res.Delta.DayPercent,
+			res.Actual.Night, res.Delta.NightPercent,
+		),
+		fmt.Sprintf("Итог по системе: *%s*.", res.Category),
+	}, "\n")
+}
+

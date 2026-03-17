@@ -31,6 +31,7 @@ var menuButtonTexts = map[string]bool{
 	"Закончился 15 минут назад": true, "Закончился 30 минут назад": true,
 	"Добавить сон": true, "Исправить последний сон": true,
 	"Отчеты": true, "Напоминания": true, "Настройки": true,
+	"Оценить": true,
 }
 
 type SleepBot struct {
@@ -319,6 +320,8 @@ func (b *SleepBot) handleText(ctx context.Context, userCtx UserContext, msg *tgb
 		return b.sendText(msg.Chat.ID, editMsg)
 	case "Отчеты":
 		return b.sendDashboard(ctx, userCtx, msg.Chat.ID)
+	case "Оценить":
+		return b.sendEvaluation(ctx, userCtx, msg.Chat.ID)
 	case "Напоминания":
 		return b.sendReminders(ctx, userCtx, msg.Chat.ID)
 	case "Настройки":
@@ -694,6 +697,7 @@ func (b *SleepBot) mainKeyboard(active bool) tgbotapi.ReplyKeyboardMarkup {
 				tgbotapi.NewKeyboardButton("Исправить последний сон"),
 			),
 			tgbotapi.NewKeyboardButtonRow(
+				tgbotapi.NewKeyboardButton("Оценить"),
 				tgbotapi.NewKeyboardButton("Отчеты"),
 				tgbotapi.NewKeyboardButton("Напоминания"),
 				tgbotapi.NewKeyboardButton("Настройки"),
@@ -716,9 +720,10 @@ func (b *SleepBot) mainKeyboard(active bool) tgbotapi.ReplyKeyboardMarkup {
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("Исправить последний сон"),
-			tgbotapi.NewKeyboardButton("Отчеты"),
+			tgbotapi.NewKeyboardButton("Оценить"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("Отчеты"),
 			tgbotapi.NewKeyboardButton("Напоминания"),
 			tgbotapi.NewKeyboardButton("Настройки"),
 		),
@@ -735,6 +740,22 @@ func (b *SleepBot) mustLocation(name string) *time.Location {
 
 func (b *SleepBot) localTimeHint(userCtx UserContext) string {
 	return "Время в вашей таймзоне: `" + userCtx.Family.Timezone + "`"
+}
+
+func (b *SleepBot) sendEvaluation(ctx context.Context, userCtx UserContext, chatID int64) error {
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	active, err := b.store.GetActiveSleep(ctx, userCtx.Child.ID)
+	if err != nil {
+		return err
+	}
+	since := time.Now().UTC().Add(-48 * time.Hour)
+	sessions, err := b.store.ListCompletedSleepsSince(ctx, userCtx.Child.ID, since)
+	if err != nil {
+		return err
+	}
+	merged := sessionsWithActive(sessions, active, time.Now())
+	report := BuildNormsReport(userCtx.Child, merged, loc, time.Now())
+	return b.sendText(chatID, report)
 }
 
 func (b *SleepBot) editLastSleepMessage(ctx context.Context, userCtx UserContext) (string, error) {
