@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -34,6 +35,8 @@ func main() {
 		log.Fatalf("store init error: %v", err)
 	}
 
+	logChildAge(db)
+
 	botAPI, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
 	if err != nil {
 		log.Fatalf("telegram init error: %v", err)
@@ -51,4 +54,41 @@ func main() {
 	if err := bot.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("bot stopped with error: %v", err)
 	}
+}
+
+func logChildAge(db *sql.DB) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var birthRaw sql.NullString
+	err := db.QueryRowContext(ctx, `
+		SELECT birth_date
+		FROM children
+		WHERE birth_date IS NOT NULL AND TRIM(birth_date) != ''
+		ORDER BY id
+		LIMIT 1
+	`).Scan(&birthRaw)
+	if err != nil && err != sql.ErrNoRows {
+		log.Printf("failed to load child birth date: %v", err)
+		return
+	}
+	if !birthRaw.Valid {
+		return
+	}
+
+	birthDate, err := time.Parse("2006-01-02", birthRaw.String)
+	if err != nil {
+		log.Printf("failed to parse child birth date %q: %v", birthRaw.String, err)
+		return
+	}
+
+	age := time.Since(birthDate)
+	if age < 0 {
+		return
+	}
+
+	hours := int(age.Hours())
+	days := hours / 24
+
+	log.Printf("child age: %d days (~%d hours) since %s", days, hours, birthDate.Format("2006-01-02"))
 }
