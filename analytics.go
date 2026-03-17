@@ -305,9 +305,28 @@ func BuildSleepTable(sessions []SleepSession, end time.Time, days int, loc *time
 
 	lines := []string{buildSleepTableHeader()}
 	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
+		if !dayHasAnySleep(sessions, day, loc) {
+			continue
+		}
 		lines = append(lines, buildSleepTableRow(day, sessions, loc))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func dayHasAnySleep(sessions []SleepSession, day time.Time, loc *time.Location) bool {
+	dayStart := startOfDay(day, loc)
+	dayEnd := dayStart.Add(24 * time.Hour)
+	for _, session := range sessions {
+		if session.EndAt == nil {
+			continue
+		}
+		startAt := session.StartAt.In(loc)
+		endAt := session.EndAt.In(loc)
+		if startAt.Before(dayEnd) && endAt.After(dayStart) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildSleepTableHeader() string {
