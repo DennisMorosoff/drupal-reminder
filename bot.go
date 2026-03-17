@@ -539,7 +539,7 @@ func (b *SleepBot) sendDayReport(ctx context.Context, userCtx UserContext, chatI
 	if err != nil {
 		return err
 	}
-	sessions, err := b.store.ListCompletedSleepsSince(ctx, userCtx.Child.ID, time.Now().UTC().AddDate(0, 0, -2))
+	sessions, err := b.store.ListCompletedSleepsSince(ctx, userCtx.Child.ID, time.Now().UTC().AddDate(0, 0, -9))
 	if err != nil {
 		return err
 	}
@@ -731,9 +731,10 @@ func (b *SleepBot) editLastSleepMessage(ctx context.Context, userCtx UserContext
 	loc := b.mustLocation(userCtx.Family.Timezone)
 	msg := "Отправьте новый интервал для последнего сна."
 	if last != nil && last.EndAt != nil {
-		msg += "\nТекущее значение: `" + formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc) + "`"
+		interval := formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc)
+		msg += "\n\nИсправляемый интервал (можно скопировать и отредактировать):\n`" + interval + "`"
 	}
-	msg += "\n" + b.localTimeHint(userCtx)
+	msg += "\n\n" + b.localTimeHint(userCtx)
 	return msg, nil
 }
 

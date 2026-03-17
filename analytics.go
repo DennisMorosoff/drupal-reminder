@@ -192,14 +192,14 @@ func BuildDashboardReport(childName string, sessions []SleepSession, active *Sle
 
 	monthCount, monthTotal, monthAverage := SummarizeRange(sessions, now, 30, loc)
 	blocks = append(blocks, fmt.Sprintf("За 30 дней: %d снов, всего %s, средняя длительность %s.", monthCount, formatDurationRU(monthTotal), formatDurationRU(monthAverage)))
-	blocks = append(blocks, BuildSleepTableSection(sessionsWithActive(sessions, active, now), now, 1, loc))
+	blocks = append(blocks, BuildSleepTableSection(sessionsWithActive(sessions, active, now), now, 7, loc))
 
 	return strings.Join(blocks, "\n\n")
 }
 
 func BuildDayReport(sessions []SleepSession, active *SleepSession, day time.Time, loc *time.Location) string {
 	summary := SummarizeDay(sessions, day, loc)
-	table := BuildSleepTableSection(sessionsWithActive(sessions, active, day), day, 1, loc)
+	table := BuildSleepTableSection(sessionsWithActive(sessions, active, day), day, 7, loc)
 	return strings.Join([]string{
 		formatDaySummary("Сегодня", summary),
 		table,
@@ -315,7 +315,7 @@ func buildSleepTableHeader() string {
 	for hour := 0; hour < 24; hour++ {
 		groups = append(groups, fmt.Sprintf("%02d", hour))
 	}
-	return "дата  " + strings.Join(groups, " ")
+	return "дата   " + strings.Join(groups, " ")
 }
 
 func buildSleepTableRow(day time.Time, sessions []SleepSession, loc *time.Location) string {
