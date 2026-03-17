@@ -23,6 +23,16 @@ const (
 	stateAwaitingReminder    = "awaiting_custom_reminder"
 )
 
+// Кнопки меню: при нажатии в режиме ввода сбрасываем состояние и обрабатываем как обычное действие.
+var menuButtonTexts = map[string]bool{
+	"Сон начался": true, "Начался 5 минут назад": true, "Начался 10 минут назад": true,
+	"Начался 15 минут назад": true, "Начался 30 минут назад": true,
+	"Сон закончился": true, "Закончился 5 минут назад": true, "Закончился 10 минут назад": true,
+	"Закончился 15 минут назад": true, "Закончился 30 минут назад": true,
+	"Добавить сон": true, "Исправить последний сон": true,
+	"Отчеты": true, "Напоминания": true, "Настройки": true,
+}
+
 type SleepBot struct {
 	api   *tgbotapi.BotAPI
 	store *Store
@@ -120,12 +130,16 @@ func (b *SleepBot) handleMessage(ctx context.Context, msg *tgbotapi.Message) err
 	}
 
 	if state, err := b.store.GetUserState(ctx, msg.From.ID); err == nil && state != nil && !msg.IsCommand() {
-		handled, stateErr := b.handleState(ctx, userCtx, msg, state)
-		if stateErr != nil {
-			return stateErr
-		}
-		if handled {
-			return nil
+		if menuButtonTexts[strings.TrimSpace(msg.Text)] {
+			_ = b.store.ClearUserState(ctx, msg.From.ID)
+		} else {
+			handled, stateErr := b.handleState(ctx, userCtx, msg, state)
+			if stateErr != nil {
+				return stateErr
+			}
+			if handled {
+				return nil
+			}
 		}
 	}
 
