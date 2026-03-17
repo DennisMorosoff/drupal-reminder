@@ -21,7 +21,7 @@ FROM alpine:3.22
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata && \
+RUN apk add --no-cache ca-certificates tzdata curl && \
     addgroup -S app && \
     adduser -S -G app app && \
     mkdir -p /data && \
@@ -31,7 +31,11 @@ COPY --from=builder /out/sleepbot /app/sleepbot
 
 ENV SLEEPBOT_DB_PATH=/data/sleepbot.db
 
+EXPOSE 8080
 VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://127.0.0.1:8080/health || exit 1
 
 USER app
 

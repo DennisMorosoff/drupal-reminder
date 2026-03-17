@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -45,6 +46,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	startHealthServer(ctx)
+
 	log.Printf("sleep bot started as @%s (version=%s, build_time=%s, commit=%s)", botAPI.Self.UserName, version, buildTime, commitHash)
 
 	bot := NewSleepBot(botAPI, store, cfg)
@@ -54,6 +57,36 @@ func main() {
 	if err := bot.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatalf("bot stopped with error: %v", err)
 	}
+}
+
+func startHealthServer(ctx context.Context) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("health server error: %v", err)
+		}
+	}()
+
+	go func() {
+		<-ctx.Done()
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("health server shutdown error: %v", err)
+		}
+	}()
 }
 
 func logChildAge(db *sql.DB) {
