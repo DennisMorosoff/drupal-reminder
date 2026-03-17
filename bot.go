@@ -743,11 +743,12 @@ func (b *SleepBot) editLastSleepMessage(ctx context.Context, userCtx UserContext
 		return "", err
 	}
 	loc := b.mustLocation(userCtx.Family.Timezone)
-	msg := "Отправьте новый интервал для последнего сна."
-	if last != nil && last.EndAt != nil {
-		interval := formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc)
-		msg += "\n\nИсправляемый интервал (можно скопировать и отредактировать):\n`" + interval + "`"
+	if last == nil || last.EndAt == nil {
+		return "Записей сна пока нет. Сначала добавьте сон через «Сон».", nil
 	}
+	msg := "Отправьте новый интервал для последнего сна."
+	interval := formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc)
+	msg += "\n\nИсправляемый интервал (можно скопировать и отредактировать):\n`" + interval + "`"
 	msg += "\n\n" + b.localTimeHint(userCtx)
 	return msg, nil
 }
