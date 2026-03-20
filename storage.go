@@ -283,7 +283,7 @@ func (s *Store) EnsureMember(ctx context.Context, telegramUserID int64, telegram
 			wake_window_minutes, max_sleep_minutes, inactivity_minutes,
 			milestone_notify_each, milestone_report_today,
 			created_at, updated_at
-		) VALUES (?, 1, 1, 1, 1, 90, 120, 240, 0, 0, ?, ?)`,
+		) VALUES (?, 0, 1, 1, 1, 90, 120, 240, 0, 0, ?, ?)`,
 		familyID, now, now,
 	); err != nil {
 		return UserContext{}, false, err
