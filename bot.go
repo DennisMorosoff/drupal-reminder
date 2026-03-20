@@ -681,7 +681,19 @@ func (b *SleepBot) appendMilestoneReportBlock(userCtx UserContext, base string, 
 	}
 	ms := MilestonesOnLocalCalendarDay(anchor, calendarDay, loc)
 	if len(ms) == 0 {
-		return base
+		nowLocal := time.Now().In(loc)
+		d := calendarDay.In(loc)
+		isToday := d.Year() == nowLocal.Year() && d.Month() == nowLocal.Month() && d.Day() == nowLocal.Day()
+		if !isToday {
+			return base
+		}
+		next, at, ok := NextMilestoneAtOrAfter(anchor, nowLocal)
+		if !ok {
+			return base
+		}
+		child := escapeTelegramMarkdown(userCtx.Child.Name)
+		line := fmt.Sprintf("Сегодня красивых дат нет. Ближайшая (%s): %s — %s.", child, next.Title, formatLocalDateTime(at, loc))
+		return base + "\n\n" + line
 	}
 	block := FormatMilestoneReportBlock(escapeTelegramMarkdown(userCtx.Child.Name), ms, loc, anchor)
 	if block == "" {

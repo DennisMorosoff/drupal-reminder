@@ -378,6 +378,17 @@ func MilestonesOccurredBetween(anchor time.Time, from, to time.Time) []Milestone
 	return out
 }
 
+// NextMilestoneAtOrAfter возвращает ближайшую веху на или после момента from.
+func NextMilestoneAtOrAfter(anchor, from time.Time) (Milestone, time.Time, bool) {
+	for _, m := range milestoneScheduleSorted() {
+		at := anchor.Add(m.Offset)
+		if !at.Before(from) {
+			return m, at, true
+		}
+	}
+	return Milestone{}, time.Time{}, false
+}
+
 // ForEachMilestoneDueForNotify вызывает fn для вех в окне (now-24h, now], уже наступивших.
 // Применяет тот же суточный фильтр, что и MilestonesOnLocalCalendarDay.
 func ForEachMilestoneDueForNotify(anchor, now time.Time, loc *time.Location, fn func(m Milestone)) {

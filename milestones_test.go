@@ -145,6 +145,23 @@ func TestMilestonesOccurredBetween(t *testing.T) {
 	}
 }
 
+func TestNextMilestoneAtOrAfter(t *testing.T) {
+	loc := time.UTC
+	anchor := time.Date(2020, 1, 1, 0, 0, 0, 0, loc)
+
+	m, at, ok := NextMilestoneAtOrAfter(anchor, anchor.Add(99*time.Hour+30*time.Minute))
+	if !ok {
+		t.Fatal("expected next milestone")
+	}
+	if m.ID != "hour-100" {
+		t.Fatalf("expected hour-100, got %s", m.ID)
+	}
+	wantAt := anchor.Add(100 * time.Hour)
+	if !at.Equal(wantAt) {
+		t.Fatalf("at = %v, want %v", at, wantAt)
+	}
+}
+
 func TestPalindromeFromHalf(t *testing.T) {
 	p, err := palindromeFromHalf(12, false)
 	if err != nil || p != 1221 {
