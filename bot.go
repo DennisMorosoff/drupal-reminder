@@ -21,6 +21,11 @@ const (
 	stateAwaitingTimezone    = "awaiting_timezone"
 	stateAwaitingBirthDate   = "awaiting_birth_date"
 	stateAwaitingReminder    = "awaiting_custom_reminder"
+
+	// Онбординг нового пользователя/семьи (профиль): имя -> таймзона -> дата рождения.
+	stateOnboardingChildName  = "onboarding_child_name"
+	stateOnboardingTimezone   = "onboarding_timezone"
+	stateOnboardingBirthDate  = "onboarding_birth_date"
 )
 
 // Кнопки меню: при нажатии в режиме ввода сбрасываем состояние и обрабатываем как обычное действие.
@@ -32,6 +37,15 @@ var menuButtonTexts = map[string]bool{
 	"Добавить сон": true, "Исправить последний сон": true,
 	"Отчеты": true, "Напоминания": true, "Настройки": true,
 	"Оценить": true,
+}
+
+func isOnboardingState(state string) bool {
+	switch state {
+	case stateOnboardingChildName, stateOnboardingTimezone, stateOnboardingBirthDate:
+		return true
+	default:
+		return false
+	}
 }
 
 type SleepBot struct {
@@ -123,15 +137,21 @@ func (b *SleepBot) handleMessage(ctx context.Context, msg *tgbotapi.Message) err
 		return err
 	}
 
-	if created && !(msg.IsCommand() && strings.EqualFold(msg.Command(), "start")) {
-		intro := "Создана новая семья и профиль ребенка `Малыш`.\n\nСразу можно нажимать кнопки сна. При желании переименуйте ребенка командой /setchild или через кнопку `Настройки`."
-		if err := b.sendTextWithKeyboard(msg.Chat.ID, intro, b.mainKeyboard(false)); err != nil {
+	if created && ((msg.IsCommand() && strings.EqualFold(msg.Command(), "start")) || !msg.IsCommand()) {
+		// Для новой семьи сразу запускаем онбординг профиля, чтобы отчёты/таймзона/вехи работали корректно.
+		if err := b.startOnboarding(ctx, userCtx, msg.Chat.ID); err != nil {
 			return err
 		}
+		return nil
 	}
 
 	if state, err := b.store.GetUserState(ctx, msg.From.ID); err == nil && state != nil && !msg.IsCommand() {
-		if menuButtonTexts[strings.TrimSpace(msg.Text)] {
+		text := strings.TrimSpace(msg.Text)
+		if menuButtonTexts[text] {
+			// Во время онбординга меню-кнопки не сбрасывают состояние: сначала ответьте на вопрос анкеты.
+			if isOnboardingState(state.State) {
+				return b.sendText(msg.Chat.ID, "Сначала ответьте на вопрос анкеты. Потом можно отмечать сон кнопками.")
+			}
 			_ = b.store.ClearUserState(ctx, msg.From.ID)
 		} else {
 			handled, stateErr := b.handleState(ctx, userCtx, msg, state)
@@ -149,6 +169,24 @@ func (b *SleepBot) handleMessage(ctx context.Context, msg *tgbotapi.Message) err
 		return b.handleCommand(ctx, userCtx, msg)
 	}
 	return b.handleText(ctx, userCtx, msg)
+}
+
+func (b *SleepBot) startOnboarding(ctx context.Context, userCtx UserContext, chatID int64) error {
+	if err := b.store.SetUserState(ctx, userCtx.Member.TelegramUserID, userCtx.Family.ID, stateOnboardingChildName, pendingActionPayload{}); err != nil {
+		return err
+	}
+
+	intro := strings.Join([]string{
+		fmt.Sprintf("Привет! Это бот учёта сна для `%s`.", escapeTelegramMarkdown(userCtx.Child.Name)),
+		"",
+		"Сейчас настроим профиль семьи за 3 шага:",
+		"1) имя ребёнка",
+		"2) таймзона семьи",
+		"3) дата/время рождения (нужно для корректных отчётов и вех).",
+		"",
+		"Шаг 1/3. Как зовут ребёнка?",
+	}, "\n")
+	return b.sendTextWithKeyboard(chatID, intro, b.mainKeyboard(false))
 }
 
 func (b *SleepBot) handleJoinOnly(ctx context.Context, msg *tgbotapi.Message) error {
@@ -339,6 +377,65 @@ func (b *SleepBot) handleText(ctx context.Context, userCtx UserContext, msg *tgb
 func (b *SleepBot) handleState(ctx context.Context, userCtx UserContext, msg *tgbotapi.Message, state *UserState) (bool, error) {
 	text := strings.TrimSpace(msg.Text)
 	switch state.State {
+	case stateOnboardingChildName:
+		if err := b.store.SetChildName(ctx, userCtx.Family.ID, text); err != nil {
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
+		}
+		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateOnboardingTimezone, pendingActionPayload{}); err != nil {
+			return true, err
+		}
+		return true, b.sendTextWithKeyboard(
+			msg.Chat.ID,
+			"Шаг 2/3. Пришлите таймзону семьи (например `Europe/Moscow`).",
+			b.mainKeyboard(false),
+		)
+
+	case stateOnboardingTimezone:
+		if err := b.store.SetFamilyTimezone(ctx, userCtx.Family.ID, text); err != nil {
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
+		}
+		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateOnboardingBirthDate, pendingActionPayload{}); err != nil {
+			return true, err
+		}
+		return true, b.sendTextWithKeyboard(
+			msg.Chat.ID,
+			"Шаг 3/3. Пришлите дату и время рождения `16.03.2026 14:30` или только дату `16.03.2026` (в вашей таймзоне). Можно RFC3339.",
+			b.mainKeyboard(false),
+		)
+
+	case stateOnboardingBirthDate:
+		loc := b.mustLocation(userCtx.Family.Timezone)
+		birthDate, err := ParseBirthDateInput(text, loc)
+		if err != nil {
+			return true, b.sendText(msg.Chat.ID, "Не удалось разобрать дату рождения. Пример: `16.03.2026 14:30` или `16.03.2026`.")
+		}
+		if err := b.store.SetChildBirthDate(ctx, userCtx.Family.ID, birthDate); err != nil {
+			return true, err
+		}
+		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
+			return true, err
+		}
+
+		finish := strings.Join([]string{
+			"Готово. Профиль сохранён.",
+			"",
+			"Вести журнал сна можно кнопками:",
+			"`Сон начался` / `Сон закончился`",
+			"и ретро-кнопками `Начался/Закончился ... минут назад`.",
+			"",
+			"Автоматические напоминания включены по умолчанию.",
+			"Команды для порогов:",
+			"`/setwake 90`, `/setmaxsleep 120`, `/setinactive 240`",
+			"и включение/выключение:",
+			"`/reminders_on`, `/reminders_off`",
+			"",
+			"Красивые даты (вехи) по умолчанию выключены. Включить можно:",
+			"`/milestone_notify on` и `/milestone_report on`",
+		}, "\n")
+
+		active, _ := b.store.GetActiveSleep(ctx, userCtx.Child.ID)
+		return true, b.sendTextWithKeyboard(msg.Chat.ID, finish, b.mainKeyboard(active != nil))
+
 	case stateAwaitingManualSleep:
 		startAt, endAt, err := parseSleepRange(text, time.Now(), b.mustLocation(userCtx.Family.Timezone))
 		if err != nil {
@@ -498,14 +595,21 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 	text := strings.Join([]string{
 		fmt.Sprintf("Бот учета сна для `%s`.", escapeTelegramMarkdown(userCtx.Child.Name)),
 		"",
-		"Основные кнопки:",
+		"Журнал сна ведётся в один тап:",
 		"`Сон начался`, `Сон закончился`",
 		"`Начался 5/10/15/30 минут назад`",
 		"`Закончился 5/10/15/30 минут назад`",
 		"`Добавить сон`, `Исправить последний сон`, `Отчеты`, `Напоминания`, `Настройки`",
 		"",
+		"Настройка напоминаний:",
+		"автоматические напоминания включены по умолчанию.",
+		"`/reminders`, `/reminders_on`, `/reminders_off`, `/setwake 90`, `/setmaxsleep 120`, `/setinactive 240`",
+		"",
+		"Вехи (красивые даты) по умолчанию выключены:",
+		"`/milestone_notify on|off`, `/milestone_report on|off`",
+		"",
 		"Полезные команды:",
-		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/reminders`, `/settings`, `/milestone_notify on|off`, `/milestone_report on|off`, `/cancel`",
+		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/settings`, `/cancel`",
 	}, "\n")
 
 	active, _ := b.store.GetActiveSleep(context.Background(), userCtx.Child.ID)
