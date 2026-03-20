@@ -481,7 +481,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 			loc := b.mustLocation(target.Family.Timezone)
 			anchor, ok := BirthAnchorLocal(target.Child.BirthDate, loc)
 			if ok && !anchor.After(now) {
-				ForEachMilestoneDueForNotify(anchor, now, func(m Milestone) {
+				ForEachMilestoneDueForNotify(anchor, now, loc, func(m Milestone) {
 					key := fmt.Sprintf("milestone:%s", m.ID)
 					if okSent, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && okSent {
 						b.broadcast(target.Members, FormatMilestonePushMessage(escapeTelegramMarkdown(target.Child.Name), m.Title))

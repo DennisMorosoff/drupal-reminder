@@ -20,6 +20,9 @@ const (
 // MilestoneNotifyMaxAge не уведомлять о вехе старше этого интервала (включение настроек без «залпа» в прошлое).
 const MilestoneNotifyMaxAge = 24 * time.Hour
 
+// milestoneStepPalindromeMinDigits — короткие ступенчатые палиндромы (121, 1221) не считаем вехами.
+const milestoneStepPalindromeMinDigits = 5
+
 // При одинаковом смещении от якоря (1 ч = 60 мин = 3600 с) более «красивый» тип вехи перекрывает менее красивый.
 const (
 	milestonePriOther          = 0
@@ -193,14 +196,14 @@ func intPow10(e int) int {
 	return n
 }
 
-// addStepPalindromesUpTo добавляет только «ступенчатые» палиндромы вида 12321 / 1221:
+// addStepPalindromesUpTo добавляет только «ступенчатые» палиндромы (минимум milestoneStepPalindromeMinDigits цифр), вида 12321 / 123321:
 // слева от центра цифры идут подряд +1; у чётной длины две средние цифры — вершина (одинаковые).
 func addStepPalindromesUpTo(max int, res map[int]struct{}) {
 	if max < 1 {
 		return
 	}
 	maxDigits := len(strconv.Itoa(max))
-	for L := 2; L <= maxDigits+1; L++ {
+	for L := milestoneStepPalindromeMinDigits; L <= maxDigits+1; L++ {
 		odd := L%2 == 1
 		halfLen := (L + 1) / 2
 		lo := intPow10(halfLen - 1)
@@ -376,20 +379,26 @@ func MilestonesOccurredBetween(anchor time.Time, from, to time.Time) []Milestone
 }
 
 // ForEachMilestoneDueForNotify вызывает fn для вех в окне (now-24h, now], уже наступивших.
-func ForEachMilestoneDueForNotify(anchor, now time.Time, fn func(m Milestone)) {
-	sched := milestoneScheduleSorted()
+// Применяет тот же суточный фильтр, что и MilestonesOnLocalCalendarDay.
+func ForEachMilestoneDueForNotify(anchor, now time.Time, loc *time.Location, fn func(m Milestone)) {
+	if loc == nil {
+		return
+	}
 	cutoff := now.Add(-MilestoneNotifyMaxAge)
-	minDur := cutoff.Sub(anchor)
-	start := sort.Search(len(sched), func(i int) bool {
-		return sched[i].Offset >= minDur
-	})
-	for i := start; i < len(sched); i++ {
-		m := sched[i]
-		at := anchor.Add(m.Offset)
-		if at.After(now) {
-			break
+	startLocal := cutoff.In(loc)
+	day := time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, loc)
+	nowLocal := now.In(loc)
+	lastDay := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, loc)
+
+	for !day.After(lastDay) {
+		ms := MilestonesOnLocalCalendarDay(anchor, day, loc)
+		for _, m := range ms {
+			at := anchor.Add(m.Offset)
+			if at.After(cutoff) && !at.After(now) {
+				fn(m)
+			}
 		}
-		fn(m)
+		day = day.Add(24 * time.Hour)
 	}
 }
 

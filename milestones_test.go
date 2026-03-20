@@ -34,10 +34,17 @@ func TestBirthAnchorLocal(t *testing.T) {
 
 func TestCollectBeautifulIntsIncludesPatterns(t *testing.T) {
 	m := collectBeautifulInts(10_000)
-	for _, n := range []int{1, 10, 100, 11, 111, 121, 123, 1234, 234} {
+	for _, n := range []int{1, 10, 100, 11, 111, 123, 1234, 234} {
 		if _, ok := m[n]; !ok {
 			t.Fatalf("expected %d in beautiful set", n)
 		}
+	}
+	if _, ok := m[121]; ok {
+		t.Fatal("121 is too short a step palindrome for milestones")
+	}
+	mLarge := collectBeautifulInts(20_000)
+	if _, ok := mLarge[12321]; !ok {
+		t.Fatal("expected 12321 (5-digit step palindrome) in beautiful set")
 	}
 }
 
@@ -82,11 +89,40 @@ func TestForEachMilestoneDueForNotifyWindow(t *testing.T) {
 	anchor := time.Date(2020, 1, 1, 0, 0, 0, 0, loc)
 	now := time.Date(2020, 1, 5, 15, 0, 0, 0, loc)
 	var ids []string
-	ForEachMilestoneDueForNotify(anchor, now, func(m Milestone) {
+	ForEachMilestoneDueForNotify(anchor, now, loc, func(m Milestone) {
 		ids = append(ids, m.ID)
 	})
 	if len(ids) == 0 {
 		t.Fatal("expected some milestones in 24h window before now")
+	}
+}
+
+func TestForEachMilestoneDueForNotifyMatchesDailyReportFilter(t *testing.T) {
+	loc := time.UTC
+	anchor := time.Date(2020, 1, 1, 0, 0, 0, 0, loc)
+	// 7777 мин = 5д 09:37, 7887 мин = 5д 11:27 — в одном календарном дне.
+	// При наличии 7777 в этот день 7887 должен быть отфильтрован и в push.
+	now := anchor.Add(5*24*time.Hour + 12*time.Hour)
+
+	var got []string
+	ForEachMilestoneDueForNotify(anchor, now, loc, func(m Milestone) {
+		got = append(got, m.ID)
+	})
+	has7777 := false
+	has7887 := false
+	for _, id := range got {
+		if id == "min-7777" {
+			has7777 = true
+		}
+		if id == "min-7887" {
+			has7887 = true
+		}
+	}
+	if !has7777 {
+		t.Fatal("expected min-7777 in notify window")
+	}
+	if has7887 {
+		t.Fatal("min-7887 should be filtered out to match report")
 	}
 }
 
