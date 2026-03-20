@@ -764,10 +764,14 @@ func (b *SleepBot) broadcast(members []Member, text string) {
 }
 
 func (b *SleepBot) sendText(chatID int64, text string) error {
-	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = "Markdown"
-	_, err := b.api.Send(msg)
-	return err
+	for _, part := range splitTelegramMessage(text, telegramMaxMessageRunes) {
+		msg := tgbotapi.NewMessage(chatID, part)
+		msg.ParseMode = "Markdown"
+		if _, err := b.api.Send(msg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *SleepBot) sendTextWithKeyboard(chatID int64, text string, keyboard tgbotapi.ReplyKeyboardMarkup) error {

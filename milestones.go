@@ -272,10 +272,18 @@ func MilestonesOnLocalCalendarDay(anchor time.Time, day time.Time, loc *time.Loc
 	return out
 }
 
+// Сколько вех показывать в отчёте (полный список за сутки может быть тысячами строк и превысит лимит Telegram 4096).
+const milestoneReportMaxLines = 50
+
 // FormatMilestoneReportBlock форматирует блок для отчёта; пустая строка, если нечего показать.
 func FormatMilestoneReportBlock(childName string, milestones []Milestone, loc *time.Location, anchor time.Time) string {
 	if len(milestones) == 0 {
 		return ""
+	}
+	extra := 0
+	if len(milestones) > milestoneReportMaxLines {
+		extra = len(milestones) - milestoneReportMaxLines
+		milestones = milestones[:milestoneReportMaxLines]
 	}
 	var b strings.Builder
 	if childName != "" {
@@ -286,6 +294,9 @@ func FormatMilestoneReportBlock(childName string, milestones []Milestone, loc *t
 	for _, m := range milestones {
 		at := anchor.Add(m.Offset).In(loc)
 		b.WriteString(fmt.Sprintf("• %s — в %s\n", m.Title, at.Format("15:04")))
+	}
+	if extra > 0 {
+		b.WriteString(fmt.Sprintf("… и ещё %d вех за этот календарный день.\n", extra))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }
