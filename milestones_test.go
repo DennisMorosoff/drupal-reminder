@@ -161,3 +161,43 @@ func TestMilestoneKindPriority(t *testing.T) {
 		t.Fatal("sanity: 3600 should not be step palindrome")
 	}
 }
+
+func TestMilestonesSameCalendarDayPreferRepdigitOverStepPal(t *testing.T) {
+	ms := []Milestone{
+		{ID: "min-7777", Offset: time.Hour, Title: "a"},
+		{ID: "min-7887", Offset: 2 * time.Hour, Title: "b"},
+	}
+	out := milestonesSameCalendarDayPreferRepdigitOverStepPal(ms)
+	if len(out) != 1 || out[0].ID != "min-7777" {
+		t.Fatalf("expected only min-7777, got %#v", out)
+	}
+
+	sec := []Milestone{
+		{ID: "sec-444444", Offset: 3 * time.Minute, Title: "a"},
+		{ID: "sec-456789", Offset: 4 * time.Minute, Title: "b"},
+	}
+	out2 := milestonesSameCalendarDayPreferRepdigitOverStepPal(sec)
+	if len(out2) != 1 || out2[0].ID != "sec-444444" {
+		t.Fatalf("expected only sec-444444, got %#v", out2)
+	}
+
+	// Нет репдигита — обе «украшалки» остаются
+	mixed := []Milestone{
+		{ID: "min-7887", Offset: time.Hour, Title: "a"},
+		{ID: "min-1234", Offset: 2 * time.Hour, Title: "b"},
+	}
+	out3 := milestonesSameCalendarDayPreferRepdigitOverStepPal(mixed)
+	if len(out3) != 2 {
+		t.Fatalf("expected both without repdigit, got %d", len(out3))
+	}
+
+	// Другая шкала: sec-репдигит не трогает min-палиндром
+	cross := []Milestone{
+		{ID: "sec-111111", Offset: time.Minute, Title: "a"},
+		{ID: "min-7887", Offset: 2 * time.Hour, Title: "b"},
+	}
+	out4 := milestonesSameCalendarDayPreferRepdigitOverStepPal(cross)
+	if len(out4) != 2 {
+		t.Fatalf("expected cross-scale keep both, got %d", len(out4))
+	}
+}

@@ -409,7 +409,66 @@ func MilestonesOnLocalCalendarDay(anchor time.Time, day time.Time, loc *time.Loc
 			out = append(out, m)
 		}
 	}
+	return milestonesSameCalendarDayPreferRepdigitOverStepPal(out)
+}
+
+// milestonesSameCalendarDayPreferRepdigitOverStepPal за один календарный день в каждой шкале (sec/min/hour/day)
+// убирает ступенчатые палиндромы и строгие «лесенки» 456789…, если в этот же день по той же шкале уже есть репдигит.
+func milestonesSameCalendarDayPreferRepdigitOverStepPal(ms []Milestone) []Milestone {
+	if len(ms) == 0 {
+		return ms
+	}
+	hasRepdigitByScale := make(map[string]bool)
+	for _, m := range ms {
+		n, ok := parseMilestoneIDNumber(m.ID)
+		if !ok || !isRepdigit(n) {
+			continue
+		}
+		if p := milestoneScalePrefix(m.ID); p != "" {
+			hasRepdigitByScale[p] = true
+		}
+	}
+	if len(hasRepdigitByScale) == 0 {
+		return ms
+	}
+	out := make([]Milestone, 0, len(ms))
+	for _, m := range ms {
+		n, ok := parseMilestoneIDNumber(m.ID)
+		if !ok {
+			out = append(out, m)
+			continue
+		}
+		scale := milestoneScalePrefix(m.ID)
+		if scale != "" && hasRepdigitByScale[scale] && !isRepdigit(n) &&
+			(isStepPalindrome(n) || isStrictAscendingDigitRun(n)) {
+			continue
+		}
+		out = append(out, m)
+	}
 	return out
+}
+
+// isStrictAscendingDigitRun — подряд идущие цифры +1 (как «лесенка» 123, …, 456789), длина ≥ 3.
+func isStrictAscendingDigitRun(n int) bool {
+	s := strconv.Itoa(n)
+	if len(s) < 3 {
+		return false
+	}
+	for i := 0; i < len(s)-1; i++ {
+		if s[i+1] != s[i]+1 {
+			return false
+		}
+	}
+	return true
+}
+
+func milestoneScalePrefix(id string) string {
+	for _, prefix := range []string{"day-", "hour-", "min-", "sec-"} {
+		if strings.HasPrefix(id, prefix) {
+			return prefix
+		}
+	}
+	return ""
 }
 
 // Сколько вех показывать в отчёте (полный список за сутки может быть тысячами строк и превысит лимит Telegram 4096).
