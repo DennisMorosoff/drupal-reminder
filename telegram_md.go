@@ -14,7 +14,6 @@ func escapeTelegramMarkdown(s string) string {
 }
 
 // splitTelegramMessage режет текст на части не длиннее maxRunes, по возможности по переводу строки.
-// Если обрезка попадает внутрь незакрытого блока ```, сдвигает границу назад, чтобы не ломать Markdown.
 func splitTelegramMessage(text string, maxRunes int) []string {
 	if maxRunes <= 0 {
 		maxRunes = telegramMaxMessageRunes
@@ -53,30 +52,24 @@ func splitTelegramMessage(text string, maxRunes int) []string {
 		if cut < 0 {
 			cut = end
 		}
-		pieceRunes := rs[start:cut]
-		for strings.Count(string(pieceRunes), "```")%2 != 0 {
-			j := -1
-			for i := len(pieceRunes) - 1; i >= 0; i-- {
-				if pieceRunes[i] == '\n' {
-					j = i
-					break
-				}
-			}
-			if j <= 0 {
-				break
-			}
-			cut = start + j + 1
-			pieceRunes = rs[start:cut]
+		if cut <= start {
+			cut = end
 		}
-		if len(pieceRunes) == 0 {
-			cut = start + maxRunes
-			pieceRunes = rs[start:cut]
-		}
-		out = append(out, string(pieceRunes))
+		out = append(out, string(rs[start:cut]))
 		start = cut
 		for start < len(rs) && rs[start] == '\n' {
 			start++
 		}
 	}
 	return out
+}
+
+func telegramSendPlainFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "parse") ||
+		strings.Contains(s, "entity") ||
+		strings.Contains(s, "entities")
 }

@@ -767,7 +767,12 @@ func (b *SleepBot) sendText(chatID int64, text string) error {
 	for _, part := range splitTelegramMessage(text, telegramMaxMessageRunes) {
 		msg := tgbotapi.NewMessage(chatID, part)
 		msg.ParseMode = "Markdown"
-		if _, err := b.api.Send(msg); err != nil {
+		_, err := b.api.Send(msg)
+		if err != nil && telegramSendPlainFallback(err) {
+			msg.ParseMode = ""
+			_, err = b.api.Send(msg)
+		}
+		if err != nil {
 			return err
 		}
 	}
