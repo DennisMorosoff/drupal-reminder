@@ -69,6 +69,8 @@ go build -o sleepbot .
 - `/deletereminder 1`
 - `/editlast`
 - `/cancel`
+- `/silent_mode`
+- `/reset_service confirm`
 
 ## Модель данных
 

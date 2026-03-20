@@ -208,6 +208,25 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 	switch command {
 	case "start", "help":
 		return b.sendWelcome(userCtx, msg.Chat.ID)
+	case "reset_service":
+		// Команда глобального сброса данных бота: полностью очищает SQLite.
+		// В качестве защиты от случайного запуска требуется аргумент `confirm`.
+		if args != "confirm" && args != "yes" {
+			return b.sendText(msg.Chat.ID, "Использование: `/reset_service confirm`")
+		}
+		if err := b.store.ResetService(ctx); err != nil {
+			return err
+		}
+		return b.sendText(msg.Chat.ID, "Сервис сброшен: все данные очищены.")
+	case "silent_mode":
+		// Команда глобального молчаливого режима: выключает все автоматические уведомления.
+		if args != "" {
+			return b.sendText(msg.Chat.ID, "Использование: `/silent_mode`")
+		}
+		if err := b.store.SetSilentMode(ctx, true); err != nil {
+			return err
+		}
+		return b.sendText(msg.Chat.ID, "Молчаливый режим включен: все уведомления выключены.")
 	case "invite":
 		code, expiresAt, err := b.store.CreateInviteCode(ctx, userCtx.Family.ID)
 		if err != nil {
@@ -610,6 +629,8 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 		"",
 		"Полезные команды:",
 		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/settings`, `/cancel`",
+		"`/silent_mode` — выключить все уведомления",
+		"`/reset_service confirm` — полная очистка данных",
 	}, "\n")
 
 	active, _ := b.store.GetActiveSleep(context.Background(), userCtx.Child.ID)

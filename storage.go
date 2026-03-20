@@ -970,6 +970,57 @@ func (s *Store) ClearUserState(ctx context.Context, telegramUserID int64) error 
 	return err
 }
 
+// ResetService performs a full wipe of all persistent bot data.
+// After this call the bot will start fresh and recreate a family/profile on next use.
+func (s *Store) ResetService(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Ensure ON for this connection (needed for cascades).
+	if _, err := tx.ExecContext(ctx, `PRAGMA foreign_keys = ON;`); err != nil {
+		return err
+	}
+
+	// One entry point is enough because all dependent rows use ON DELETE CASCADE.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM families`); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Keep DB file compact (best-effort; VACUUM can be costly on big DBs).
+	_, _ = s.db.ExecContext(ctx, `VACUUM;`)
+	return nil
+}
+
+// SetSilentMode disables all automatic notifications for the whole service.
+// It also disables the optional milestone block inside generated reports.
+func (s *Store) SetSilentMode(ctx context.Context, silent bool) error {
+	if !silent {
+		// There's no separate "restore defaults" mode requested here; the caller can
+		// control settings via existing commands.
+		return nil
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE reminder_settings
+		SET
+			reminders_enabled = 0,
+			wake_window_enabled = 0,
+			max_sleep_enabled = 0,
+			inactivity_enabled = 0,
+			milestone_notify_each = 0,
+			milestone_report_today = 0,
+			updated_at = ?
+	`, s.nowUTCString())
+	return err
+}
+
 func (s *Store) TryMarkNotificationSent(ctx context.Context, familyID int64, key string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO notification_log(family_id, reminder_key, sent_at)
