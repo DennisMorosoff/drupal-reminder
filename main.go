@@ -109,9 +109,9 @@ func logChildAge(db *sql.DB) {
 		return
 	}
 
-	birthDate, err := time.Parse("2006-01-02", birthRaw.String)
-	if err != nil {
-		log.Printf("failed to parse child birth date %q: %v", birthRaw.String, err)
+	birthDate, ok := ParseBirthDateStored(birthRaw.String)
+	if !ok {
+		log.Printf("failed to parse child birth date %q", birthRaw.String)
 		return
 	}
 
@@ -123,5 +123,5 @@ func logChildAge(db *sql.DB) {
 	hours := int(age.Hours())
 	days := hours / 24
 
-	log.Printf("child age: %d days (~%d hours) since %s", days, hours, birthDate.Format("2006-01-02"))
+	log.Printf("child age: %d days (~%d hours) since %s", days, hours, birthDate.Format(time.RFC3339))
 }

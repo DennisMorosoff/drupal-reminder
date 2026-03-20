@@ -19,6 +19,17 @@ func TestBirthAnchorLocal(t *testing.T) {
 	if _, ok := BirthAnchorLocal(nil, loc); ok {
 		t.Fatal("nil birth should fail")
 	}
+
+	// Рождение «вечером» по UTC, но уже следующий календарный день в MSK — якорь по дню в таймзоне семьи.
+	birthLateUTC := time.Date(2026, 3, 15, 22, 30, 0, 0, time.UTC)
+	anchor2, ok := BirthAnchorLocal(&birthLateUTC, loc)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	want2 := time.Date(2026, 3, 16, 0, 0, 0, 0, loc)
+	if !anchor2.Equal(want2) {
+		t.Fatalf("anchor cross-midnight = %v, want %v", anchor2, want2)
+	}
 }
 
 func TestCollectBeautifulIntsIncludesPatterns(t *testing.T) {

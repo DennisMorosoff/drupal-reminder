@@ -228,7 +228,7 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 		if err := b.store.SetUserState(ctx, msg.From.ID, userCtx.Family.ID, stateAwaitingBirthDate, pendingActionPayload{}); err != nil {
 			return err
 		}
-		return b.sendText(msg.Chat.ID, "Отправьте дату рождения в формате `02.01.2006`.")
+		return b.sendText(msg.Chat.ID, "Отправьте дату и время рождения: `02.01.2006 15:04` или только дату: `02.01.2006` (время — в вашей таймзоне из настроек). Можно RFC3339.")
 	case "setwake":
 		return b.updateReminderThreshold(ctx, userCtx, msg.Chat.ID, "wake_window_minutes", args)
 	case "setmaxsleep":
@@ -604,14 +604,15 @@ func (b *SleepBot) sendSettings(ctx context.Context, userCtx UserContext, chatID
 	lines = append(lines, fmt.Sprintf("Ребенок: %s", userCtx.Child.Name))
 	lines = append(lines, fmt.Sprintf("Таймзона: %s", userCtx.Family.Timezone))
 	if userCtx.Child.BirthDate != nil {
-		lines = append(lines, fmt.Sprintf("Дата рождения: %s", userCtx.Child.BirthDate.Format("02.01.2006")))
+		loc := b.mustLocation(userCtx.Family.Timezone)
+		lines = append(lines, fmt.Sprintf("Дата и время рождения: %s", formatChildBirthForSettings(*userCtx.Child.BirthDate, loc)))
 	}
 	lines = append(lines, "")
 	lines = append(lines, "Команды:")
 	lines = append(lines, "`/invite`")
 	lines = append(lines, "`/setchild Имя`")
 	lines = append(lines, "`/settimezone Europe/Moscow`")
-	lines = append(lines, "`/setbirthdate 16.03.2026`")
+	lines = append(lines, "`/setbirthdate 16.03.2026 14:30` или `/setbirthdate 16.03.2026`")
 	lines = append(lines, "`/editlast`")
 	lines = append(lines, "")
 	lines = append(lines, "Красивые даты (от полуночи дня рождения в вашей таймзоне):")
@@ -728,14 +729,15 @@ func (b *SleepBot) updateReminderThreshold(ctx context.Context, userCtx UserCont
 }
 
 func (b *SleepBot) applyBirthDate(ctx context.Context, userCtx UserContext, chatID int64, raw string) error {
-	birthDate, err := time.Parse("02.01.2006", strings.TrimSpace(raw))
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	birthDate, err := ParseBirthDateInput(raw, loc)
 	if err != nil {
-		return b.sendText(chatID, "Дата должна быть в формате `02.01.2006`.")
+		return b.sendText(chatID, "Укажите `02.01.2006 15:04` или `02.01.2006` (время в вашей таймзоне), либо RFC3339.")
 	}
 	if err := b.store.SetChildBirthDate(ctx, userCtx.Family.ID, birthDate); err != nil {
 		return err
 	}
-	return b.sendText(chatID, "Дата рождения сохранена.")
+	return b.sendText(chatID, "Дата и время рождения сохранены.")
 }
 
 func (b *SleepBot) applyCustomReminder(ctx context.Context, userCtx UserContext, chatID int64, raw string) error {

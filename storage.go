@@ -63,16 +63,16 @@ type SleepSession struct {
 }
 
 type ReminderSettings struct {
-	FamilyID              int64
-	RemindersEnabled      bool
-	WakeWindowEnabled     bool
-	MaxSleepEnabled       bool
-	InactivityEnabled     bool
-	WakeWindowMinutes     int
-	MaxSleepMinutes       int
-	InactivityMinutes     int
-	MilestoneNotifyEach   bool
-	MilestoneReportToday  bool
+	FamilyID             int64
+	RemindersEnabled     bool
+	WakeWindowEnabled    bool
+	MaxSleepEnabled      bool
+	InactivityEnabled    bool
+	WakeWindowMinutes    int
+	MaxSleepMinutes      int
+	InactivityMinutes    int
+	MilestoneNotifyEach  bool
+	MilestoneReportToday bool
 }
 
 type CustomReminder struct {
@@ -440,7 +440,7 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 	settings.MilestoneReportToday = milestoneReport == 1
 
 	if birthDateString.Valid && strings.TrimSpace(birthDateString.String) != "" {
-		if parsed, parseErr := time.Parse("2006-01-02", birthDateString.String); parseErr == nil {
+		if parsed, ok := ParseBirthDateStored(birthDateString.String); ok {
 			child.BirthDate = &parsed
 		}
 	}
@@ -499,7 +499,7 @@ func (s *Store) GetReminderTargets(ctx context.Context) ([]ReminderTarget, error
 		target.Settings.MilestoneReportToday = milestoneReport == 1
 
 		if birthDateString.Valid && strings.TrimSpace(birthDateString.String) != "" {
-			if parsed, parseErr := time.Parse("2006-01-02", birthDateString.String); parseErr == nil {
+			if parsed, ok := ParseBirthDateStored(birthDateString.String); ok {
 				target.Child.BirthDate = &parsed
 			}
 		}
@@ -823,7 +823,7 @@ func (s *Store) SetChildName(ctx context.Context, familyID int64, name string) e
 func (s *Store) SetChildBirthDate(ctx context.Context, familyID int64, birthDate time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE children SET birth_date = ?, updated_at = ? WHERE family_id = ?`,
-		birthDate.Format("2006-01-02"), s.nowUTCString(), familyID,
+		FormatBirthDateStored(birthDate), s.nowUTCString(), familyID,
 	)
 	return err
 }

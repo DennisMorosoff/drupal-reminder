@@ -58,7 +58,7 @@ go build -o sleepbot .
 - `/settings`
 - `/setchild Имя`
 - `/settimezone Europe/Moscow`
-- `/setbirthdate 16.03.2026`
+- `/setbirthdate 16.03.2026 14:30` or `/setbirthdate 16.03.2026` (time in family timezone)
 - `/setwake 90`
 - `/setmaxsleep 120`
 - `/setinactive 240`

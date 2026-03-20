@@ -32,12 +32,13 @@ var (
 	milestoneScheduleOnce sync.Once
 )
 
-// BirthAnchorLocal полночь календарной даты рождения в таймзоне семьи.
+// BirthAnchorLocal полночь календарной даты рождения в таймзоне семьи
+// (календарный день берётся по местному времени семьи, а не по UTC).
 func BirthAnchorLocal(birth *time.Time, loc *time.Location) (time.Time, bool) {
 	if birth == nil || loc == nil {
 		return time.Time{}, false
 	}
-	y, m, d := birth.Date()
+	y, m, d := birth.In(loc).Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, loc), true
 }
 
