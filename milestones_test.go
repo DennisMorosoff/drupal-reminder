@@ -119,3 +119,16 @@ func TestPalindromeFromHalf(t *testing.T) {
 		t.Fatalf("odd palindrome: got %d err=%v", p, err)
 	}
 }
+
+func TestIsStepPalindrome(t *testing.T) {
+	for _, n := range []int{121, 1221, 12321, 1234321, 2345432} {
+		if !isStepPalindrome(n) {
+			t.Fatalf("%d should be step palindrome", n)
+		}
+	}
+	for _, n := range []int{131, 1331, 1001, 10201} {
+		if isStepPalindrome(n) {
+			t.Fatalf("%d should not be step palindrome", n)
+		}
+	}
+}

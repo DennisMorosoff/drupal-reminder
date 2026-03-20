@@ -131,7 +131,7 @@ func collectBeautifulInts(max int) map[int]struct{} {
 		}
 	}
 
-	addPalindromesUpTo(max, res)
+	addStepPalindromesUpTo(max, res)
 
 	return res
 }
@@ -144,8 +144,9 @@ func intPow10(e int) int {
 	return n
 }
 
-// addPalindromesUpTo перебирает палиндромы по длине, без цикла до max.
-func addPalindromesUpTo(max int, res map[int]struct{}) {
+// addStepPalindromesUpTo добавляет только «ступенчатые» палиндромы вида 12321 / 1221:
+// слева от центра цифры идут подряд +1; у чётной длины две средние цифры — вершина (одинаковые).
+func addStepPalindromesUpTo(max int, res map[int]struct{}) {
 	if max < 1 {
 		return
 	}
@@ -160,9 +161,41 @@ func addPalindromesUpTo(max int, res map[int]struct{}) {
 			if err != nil || p < 1 || p > max {
 				continue
 			}
+			if !isStepPalindrome(p) {
+				continue
+			}
 			res[p] = struct{}{}
 		}
 	}
+}
+
+func isStepPalindrome(p int) bool {
+	s := strconv.Itoa(p)
+	n := len(s)
+	if n < 2 {
+		return false
+	}
+	for i := 0; i < n/2; i++ {
+		if s[i] != s[n-1-i] {
+			return false
+		}
+	}
+	if n%2 == 0 {
+		k := n / 2
+		for i := 0; i < k-1; i++ {
+			if s[i+1] != s[i]+1 {
+				return false
+			}
+		}
+		return s[k-1] == s[k]
+	}
+	mid := n / 2
+	for i := 0; i < mid; i++ {
+		if s[i+1] != s[i]+1 {
+			return false
+		}
+	}
+	return true
 }
 
 func palindromeFromHalf(h int, odd bool) (int, error) {
