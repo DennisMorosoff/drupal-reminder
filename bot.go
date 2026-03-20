@@ -158,9 +158,9 @@ func (b *SleepBot) handleJoinOnly(ctx context.Context, msg *tgbotapi.Message) er
 	}
 	joined, err := b.store.JoinFamily(ctx, strings.ToUpper(code), msg.From.ID, msg.Chat.ID, fullName(msg.From))
 	if err != nil {
-		return b.sendText(msg.Chat.ID, err.Error())
+		return b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 	}
-	return b.sendTextWithKeyboard(msg.Chat.ID, fmt.Sprintf("Готово. Теперь вы привязаны к семье `%s`.", joined.Family.Name), b.mainKeyboard(false))
+	return b.sendTextWithKeyboard(msg.Chat.ID, fmt.Sprintf("Готово. Теперь вы привязаны к семье `%s`.", escapeTelegramMarkdown(joined.Family.Name)), b.mainKeyboard(false))
 }
 
 func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *tgbotapi.Message) error {
@@ -175,16 +175,17 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 		if err != nil {
 			return err
 		}
-		return b.sendText(msg.Chat.ID, fmt.Sprintf("Код приглашения: `%s`\nДействует до %s.\n\nВторой родитель может выполнить `/join %s`.", code, expiresAt.In(b.mustLocation(userCtx.Family.Timezone)).Format("02.01 15:04"), code))
+		escCode := escapeTelegramMarkdown(code)
+		return b.sendText(msg.Chat.ID, fmt.Sprintf("Код приглашения: `%s`\nДействует до %s.\n\nВторой родитель может выполнить `/join %s`.", escCode, expiresAt.In(b.mustLocation(userCtx.Family.Timezone)).Format("02.01 15:04"), escCode))
 	case "join":
 		if args == "" {
 			return b.sendText(msg.Chat.ID, "Использование: `/join ABC123`")
 		}
 		joined, err := b.store.JoinFamily(ctx, strings.ToUpper(args), msg.From.ID, msg.Chat.ID, fullName(msg.From))
 		if err != nil {
-			return b.sendText(msg.Chat.ID, err.Error())
+			return b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
-		return b.sendTextWithKeyboard(msg.Chat.ID, fmt.Sprintf("Готово. Теперь вы привязаны к семье `%s`.", joined.Family.Name), b.mainKeyboard(false))
+		return b.sendTextWithKeyboard(msg.Chat.ID, fmt.Sprintf("Готово. Теперь вы привязаны к семье `%s`.", escapeTelegramMarkdown(joined.Family.Name)), b.mainKeyboard(false))
 	case "status":
 		return b.sendStatus(ctx, userCtx, msg.Chat.ID)
 	case "report":
@@ -202,7 +203,7 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 	case "setchild":
 		if args != "" {
 			if err := b.store.SetChildName(ctx, userCtx.Family.ID, args); err != nil {
-				return b.sendText(msg.Chat.ID, err.Error())
+				return b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 			}
 			return b.sendText(msg.Chat.ID, "Имя ребенка обновлено.")
 		}
@@ -213,7 +214,7 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 	case "settimezone":
 		if args != "" {
 			if err := b.store.SetFamilyTimezone(ctx, userCtx.Family.ID, args); err != nil {
-				return b.sendText(msg.Chat.ID, err.Error())
+				return b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 			}
 			return b.sendText(msg.Chat.ID, "Таймзона обновлена.")
 		}
@@ -263,7 +264,7 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 			return b.sendText(msg.Chat.ID, "Использование: `/deletereminder 3`")
 		}
 		if err := b.store.DeleteCustomReminder(ctx, userCtx.Family.ID, id); err != nil {
-			return b.sendText(msg.Chat.ID, err.Error())
+			return b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
 		return b.sendText(msg.Chat.ID, "Напоминание удалено.")
 	case "editlast":
@@ -344,7 +345,7 @@ func (b *SleepBot) handleState(ctx context.Context, userCtx UserContext, msg *tg
 			return true, b.sendText(msg.Chat.ID, "Не понял интервал. Пример: `11:10 - 12:35`.")
 		}
 		if _, err := b.store.AddManualSleep(ctx, userCtx.Child.ID, userCtx.Member.ID, startAt, endAt, "manual"); err != nil {
-			return true, b.sendText(msg.Chat.ID, err.Error())
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
 		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
 			return true, err
@@ -356,7 +357,7 @@ func (b *SleepBot) handleState(ctx context.Context, userCtx UserContext, msg *tg
 			return true, b.sendText(msg.Chat.ID, "Не понял интервал. Пример: `11:10 - 12:35`.")
 		}
 		if _, err := b.store.UpdateLastCompletedSleep(ctx, userCtx.Child.ID, userCtx.Member.ID, startAt, endAt); err != nil {
-			return true, b.sendText(msg.Chat.ID, err.Error())
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
 		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
 			return true, err
@@ -364,7 +365,7 @@ func (b *SleepBot) handleState(ctx context.Context, userCtx UserContext, msg *tg
 		return true, b.sendText(msg.Chat.ID, "Последний сон обновлен.")
 	case stateAwaitingChildName:
 		if err := b.store.SetChildName(ctx, userCtx.Family.ID, text); err != nil {
-			return true, b.sendText(msg.Chat.ID, err.Error())
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
 		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
 			return true, err
@@ -372,7 +373,7 @@ func (b *SleepBot) handleState(ctx context.Context, userCtx UserContext, msg *tg
 		return true, b.sendText(msg.Chat.ID, "Имя ребенка обновлено.")
 	case stateAwaitingTimezone:
 		if err := b.store.SetFamilyTimezone(ctx, userCtx.Family.ID, text); err != nil {
-			return true, b.sendText(msg.Chat.ID, err.Error())
+			return true, b.sendText(msg.Chat.ID, escapeTelegramMarkdown(err.Error()))
 		}
 		if err := b.store.ClearUserState(ctx, msg.From.ID); err != nil {
 			return true, err
@@ -429,7 +430,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 			if now.After(due) {
 				key := fmt.Sprintf("wake-window:%d:%d", lastCompleted.ID, target.Settings.WakeWindowMinutes)
 				if ok, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && ok {
-					message := fmt.Sprintf("Пора готовить %s ко сну: окно бодрствования %d мин уже прошло.", target.Child.Name, target.Settings.WakeWindowMinutes)
+					message := fmt.Sprintf("Пора готовить %s ко сну: окно бодрствования %d мин уже прошло.", escapeTelegramMarkdown(target.Child.Name), target.Settings.WakeWindowMinutes)
 					b.broadcast(target.Members, message)
 				}
 			}
@@ -440,7 +441,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 			if now.After(due) {
 				key := fmt.Sprintf("max-sleep:%d:%d", active.ID, target.Settings.MaxSleepMinutes)
 				if ok, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && ok {
-					message := fmt.Sprintf("%s спит уже %s. Это больше порога %d мин.", target.Child.Name, formatDurationRU(now.Sub(active.StartAt)), target.Settings.MaxSleepMinutes)
+					message := fmt.Sprintf("%s спит уже %s. Это больше порога %d мин.", escapeTelegramMarkdown(target.Child.Name), formatDurationRU(now.Sub(active.StartAt)), target.Settings.MaxSleepMinutes)
 					b.broadcast(target.Members, message)
 				}
 			}
@@ -451,7 +452,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 			if now.After(due) {
 				key := fmt.Sprintf("inactivity:%d:%d", lastEvent.Unix()/60, target.Settings.InactivityMinutes)
 				if ok, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && ok {
-					message := fmt.Sprintf("Давно нет записей о сне %s. Последнее событие было %s.", target.Child.Name, formatLocalDateTime(*lastEvent, loc))
+					message := fmt.Sprintf("Давно нет записей о сне %s. Последнее событие было %s.", escapeTelegramMarkdown(target.Child.Name), formatLocalDateTime(*lastEvent, loc))
 					b.broadcast(target.Members, message)
 				}
 			}
@@ -471,7 +472,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 			}
 			key := fmt.Sprintf("custom:%d:%s", reminder.ID, currentDate)
 			if ok, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && ok {
-				b.broadcast(target.Members, fmt.Sprintf("Напоминание: %s", reminder.Title))
+				b.broadcast(target.Members, fmt.Sprintf("Напоминание: %s", escapeTelegramMarkdown(reminder.Title)))
 				_ = b.store.MarkCustomReminderFired(ctx, reminder.ID, currentDate)
 			}
 		}
@@ -483,7 +484,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 				ForEachMilestoneDueForNotify(anchor, now, func(m Milestone) {
 					key := fmt.Sprintf("milestone:%s", m.ID)
 					if okSent, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && okSent {
-						b.broadcast(target.Members, FormatMilestonePushMessage(target.Child.Name, m.Title))
+						b.broadcast(target.Members, FormatMilestonePushMessage(escapeTelegramMarkdown(target.Child.Name), m.Title))
 					}
 				})
 			}
@@ -495,7 +496,7 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 
 func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 	text := strings.Join([]string{
-		fmt.Sprintf("Бот учета сна для `%s`.", userCtx.Child.Name),
+		fmt.Sprintf("Бот учета сна для `%s`.", escapeTelegramMarkdown(userCtx.Child.Name)),
 		"",
 		"Основные кнопки:",
 		"`Сон начался`, `Сон закончился`",
@@ -514,7 +515,7 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 func (b *SleepBot) startSleep(ctx context.Context, userCtx UserContext, chatID int64, startAt time.Time, source string) error {
 	session, err := b.store.StartSleep(ctx, userCtx.Child.ID, userCtx.Member.ID, startAt.UTC(), source)
 	if err != nil {
-		return b.sendText(chatID, err.Error())
+		return b.sendText(chatID, escapeTelegramMarkdown(err.Error()))
 	}
 	loc := b.mustLocation(userCtx.Family.Timezone)
 	return b.sendTextWithKeyboard(chatID, fmt.Sprintf("Сон начался в %s.", formatLocalDateTime(session.StartAt, loc)), b.mainKeyboard(true))
@@ -523,7 +524,7 @@ func (b *SleepBot) startSleep(ctx context.Context, userCtx UserContext, chatID i
 func (b *SleepBot) endSleep(ctx context.Context, userCtx UserContext, chatID int64, endAt time.Time, source string) error {
 	session, err := b.store.EndSleep(ctx, userCtx.Child.ID, userCtx.Member.ID, endAt.UTC(), source)
 	if err != nil {
-		return b.sendText(chatID, err.Error())
+		return b.sendText(chatID, escapeTelegramMarkdown(err.Error()))
 	}
 	loc := b.mustLocation(userCtx.Family.Timezone)
 	text := fmt.Sprintf("Сон завершен в %s.\nДлительность: %s.", formatLocalDateTime(*session.EndAt, loc), formatDurationRU(session.EndAt.Sub(session.StartAt)))
@@ -542,9 +543,9 @@ func (b *SleepBot) sendStatus(ctx context.Context, userCtx UserContext, chatID i
 	loc := b.mustLocation(userCtx.Family.Timezone)
 
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Семья: %s", userCtx.Family.Name))
-	lines = append(lines, fmt.Sprintf("Ребенок: %s", userCtx.Child.Name))
-	lines = append(lines, fmt.Sprintf("Таймзона: %s", userCtx.Family.Timezone))
+	lines = append(lines, fmt.Sprintf("Семья: %s", escapeTelegramMarkdown(userCtx.Family.Name)))
+	lines = append(lines, fmt.Sprintf("Ребенок: %s", escapeTelegramMarkdown(userCtx.Child.Name)))
+	lines = append(lines, fmt.Sprintf("Таймзона: %s", escapeTelegramMarkdown(userCtx.Family.Timezone)))
 	lines = append(lines, fmt.Sprintf("Подключено родителей: %d", len(members)))
 	if active != nil {
 		lines = append(lines, fmt.Sprintf("Сейчас идет сон с %s.", formatLocalDateTime(active.StartAt, loc)))
@@ -564,7 +565,7 @@ func (b *SleepBot) sendDashboard(ctx context.Context, userCtx UserContext, chatI
 		return err
 	}
 	loc := b.mustLocation(userCtx.Family.Timezone)
-	report := BuildDashboardReport(userCtx.Child.Name, sessions, active, loc, time.Now())
+	report := BuildDashboardReport(escapeTelegramMarkdown(userCtx.Child.Name), sessions, active, loc, time.Now())
 	report = b.appendMilestoneReportBlock(userCtx, report, time.Now().In(loc))
 	return b.sendText(chatID, report)
 }
@@ -601,8 +602,8 @@ func (b *SleepBot) sendRangeReport(ctx context.Context, userCtx UserContext, cha
 func (b *SleepBot) sendSettings(ctx context.Context, userCtx UserContext, chatID int64) error {
 	var lines []string
 	lines = append(lines, "Настройки:")
-	lines = append(lines, fmt.Sprintf("Ребенок: %s", userCtx.Child.Name))
-	lines = append(lines, fmt.Sprintf("Таймзона: %s", userCtx.Family.Timezone))
+	lines = append(lines, fmt.Sprintf("Ребенок: %s", escapeTelegramMarkdown(userCtx.Child.Name)))
+	lines = append(lines, fmt.Sprintf("Таймзона: %s", escapeTelegramMarkdown(userCtx.Family.Timezone)))
 	if userCtx.Child.BirthDate != nil {
 		loc := b.mustLocation(userCtx.Family.Timezone)
 		lines = append(lines, fmt.Sprintf("Дата и время рождения: %s", formatChildBirthForSettings(*userCtx.Child.BirthDate, loc)))
@@ -644,7 +645,7 @@ func (b *SleepBot) sendReminders(ctx context.Context, userCtx UserContext, chatI
 		lines = append(lines, "")
 		lines = append(lines, "Пользовательские напоминания:")
 		for _, reminder := range custom {
-			lines = append(lines, fmt.Sprintf("`%d` %s %s", reminder.ID, reminder.AtTime, reminder.Title))
+			lines = append(lines, fmt.Sprintf("`%d` %s %s", reminder.ID, reminder.AtTime, escapeTelegramMarkdown(reminder.Title)))
 		}
 		lines = append(lines, "Удаление: `/deletereminder ID`")
 	}
@@ -682,7 +683,7 @@ func (b *SleepBot) appendMilestoneReportBlock(userCtx UserContext, base string, 
 	if len(ms) == 0 {
 		return base
 	}
-	block := FormatMilestoneReportBlock(userCtx.Child.Name, ms, loc, anchor)
+	block := FormatMilestoneReportBlock(escapeTelegramMarkdown(userCtx.Child.Name), ms, loc, anchor)
 	if block == "" {
 		return base
 	}
@@ -746,7 +747,7 @@ func (b *SleepBot) applyCustomReminder(ctx context.Context, userCtx UserContext,
 		return b.sendText(chatID, "Формат: `19:30 Купание`.")
 	}
 	if err := b.store.AddCustomReminder(ctx, userCtx.Family.ID, parts[0], parts[1], "0,1,2,3,4,5,6"); err != nil {
-		return b.sendText(chatID, err.Error())
+		return b.sendText(chatID, escapeTelegramMarkdown(err.Error()))
 	}
 	return b.sendText(chatID, "Пользовательское напоминание добавлено.")
 }
@@ -835,7 +836,7 @@ func (b *SleepBot) mustLocation(name string) *time.Location {
 }
 
 func (b *SleepBot) localTimeHint(userCtx UserContext) string {
-	return "Время в вашей таймзоне: `" + userCtx.Family.Timezone + "`"
+	return "Время в вашей таймзоне: `" + escapeTelegramMarkdown(userCtx.Family.Timezone) + "`"
 }
 
 func (b *SleepBot) sendEvaluation(ctx context.Context, userCtx UserContext, chatID int64) error {
@@ -865,7 +866,7 @@ func (b *SleepBot) editLastSleepMessage(ctx context.Context, userCtx UserContext
 	}
 	msg := "Отправьте новый интервал для последнего сна."
 	interval := formatLocalDateTime(last.StartAt, loc) + " - " + formatLocalDateTime(*last.EndAt, loc)
-	msg += "\n\nИсправляемый интервал (можно скопировать и отредактировать):\n`" + interval + "`"
+	msg += "\n\nИсправляемый интервал (можно скопировать и отредактировать):\n`" + escapeTelegramMarkdown(interval) + "`"
 	msg += "\n\n" + b.localTimeHint(userCtx)
 	return msg, nil
 }

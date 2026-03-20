@@ -639,9 +639,10 @@ func BuildNormsReport(child Child, sessions []SleepSession, loc *time.Location, 
 	avgScore := (resA.Delta.Score + resB.Delta.Score + resC.Delta.Score) / 3
 	overallCategory := categoryByScore(avgScore)
 
+	safeName := escapeTelegramMarkdown(child.Name)
 	lines := []string{
-		fmt.Sprintf("Оценка сна %s за последние 24 часа:", child.Name),
-		fmt.Sprintf("**Сводка:** в среднем по 3 системам — *%s* (среднее отклонение %.1f%%).", overallCategory, avgScore),
+		fmt.Sprintf("Оценка сна %s за последние 24 часа:", safeName),
+		fmt.Sprintf("*Сводка:* в среднем по 3 системам — _%s_ (среднее отклонение %.1f%%).", overallCategory, avgScore),
 		"",
 		formatSystemBlock(resA, "Система A (русская таблица)"),
 		"",
@@ -657,7 +658,7 @@ func BuildNormsReport(child Child, sessions []SleepSession, loc *time.Location, 
 
 func formatSystemBlock(res NormSystemResult, title string) string {
 	return strings.Join([]string{
-		fmt.Sprintf("**%s** (возрастная группа %s)", title, res.Band),
+		fmt.Sprintf("*%s* (возрастная группа %s)", title, res.Band),
 		fmt.Sprintf("Норма: всего %.1f–%.1f ч, день %.1f–%.1f ч, ночь %.1f–%.1f ч.",
 			res.Norm.TotalMin, res.Norm.TotalMax,
 			res.Norm.DayMin, res.Norm.DayMax,
@@ -668,7 +669,7 @@ func formatSystemBlock(res NormSystemResult, title string) string {
 			res.Actual.Day, res.Delta.DayPercent,
 			res.Actual.Night, res.Delta.NightPercent,
 		),
-		fmt.Sprintf("Итог по системе: *%s*.", res.Category),
+		fmt.Sprintf("Итог по системе: _%s_.", res.Category),
 	}, "\n")
 }
 

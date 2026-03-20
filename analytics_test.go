@@ -110,3 +110,46 @@ func TestBuildRangeReportIncludesSleepTable(t *testing.T) {
 		t.Fatalf("expected sleep cells in table, got %s", report)
 	}
 }
+
+func TestEscapeTelegramMarkdown(t *testing.T) {
+	if got := escapeTelegramMarkdown(`a_b*c[d`); got != `a\_b\*c\[d` {
+		t.Fatalf("unexpected escape: %q", got)
+	}
+	if got := escapeTelegramMarkdown("x`y"); got != "x\\`y" {
+		t.Fatalf("backtick escape: %q", got)
+	}
+}
+
+func TestBuildDashboardReportWithEscapedChildName(t *testing.T) {
+	loc := time.FixedZone("UTC+3", 3*60*60)
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, loc)
+	raw := "Малыш_2`тест"
+	escaped := escapeTelegramMarkdown(raw)
+	if escaped == raw {
+		t.Fatal("expected raw name to require escaping")
+	}
+	start := time.Date(2026, 3, 16, 10, 0, 0, 0, loc).UTC()
+	end := start.Add(time.Hour)
+	sessions := []SleepSession{{ID: 1, StartAt: start, EndAt: &end}}
+	report := BuildDashboardReport(escaped, sessions, nil, loc, now)
+	if !strings.Contains(report, escaped) {
+		t.Fatalf("report should include escaped name substring, got: %s", report)
+	}
+}
+
+func TestBuildNormsReportUsesTelegramLegacyMarkdown(t *testing.T) {
+	loc := time.FixedZone("UTC+3", 3*60*60)
+	now := time.Date(2026, 3, 16, 12, 0, 0, 0, loc)
+	birth := now.AddDate(0, -4, 0)
+	child := Child{Name: "Малыш", BirthDate: &birth}
+	start := now.Add(-2 * time.Hour).UTC()
+	end := start.Add(time.Hour)
+	sessions := []SleepSession{{StartAt: start, EndAt: &end}}
+	s := BuildNormsReport(child, sessions, loc, now)
+	if strings.Contains(s, "**") {
+		t.Fatalf("legacy Telegram Markdown must not use **: %s", s)
+	}
+	if !strings.Contains(s, "*Сводка:*") {
+		t.Fatalf("expected *Сводка:* bold label: %s", s)
+	}
+}
