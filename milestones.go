@@ -20,6 +20,24 @@ const (
 // MilestoneNotifyMaxAge не уведомлять о вехе старше этого интервала (включение настроек без «залпа» в прошлое).
 const MilestoneNotifyMaxAge = 24 * time.Hour
 
+// При одинаковом смещении от якоря (1 ч = 60 мин = 3600 с) более «красивый» тип вехи перекрывает менее красивый.
+const (
+	milestonePriOther          = 0
+	milestonePriStepPalindrome = 10
+	milestonePriRepdigit       = 20
+)
+
+// stepPalindromeRepdigitTwinFrom — репдигит той же длины, что и p, с той же первой цифрой (напр. 456654 → 444444).
+func stepPalindromeRepdigitTwinFrom(p int) int {
+	s := strconv.Itoa(p)
+	v := 0
+	d := int(s[0] - '0')
+	for i := 0; i < len(s); i++ {
+		v = v*10 + d
+	}
+	return v
+}
+
 // Milestone описывает одну «красивую» веху от якоря рождения.
 type Milestone struct {
 	ID     string
@@ -52,37 +70,68 @@ func milestoneScheduleSorted() []Milestone {
 }
 
 func buildMilestoneSchedule() []Milestone {
-	byNano := make(map[int64]Milestone)
+	type scored struct {
+		m   Milestone
+		pri int
+	}
 
-	merge := func(off time.Duration, id, title string) {
+	daySet := collectBeautifulInts(milestoneMaxDays)
+	hSet := collectBeautifulInts(milestoneMaxHours)
+	mSet := collectBeautifulInts(milestoneMaxMinutes)
+	sSet := collectBeautifulInts(milestoneMaxSeconds)
+
+	var cs []scored
+	for n := range daySet {
+		off := time.Duration(n) * 24 * time.Hour
 		if off <= 0 {
-			return
+			continue
 		}
-		nano := off.Nanoseconds()
-		if _, ok := byNano[nano]; ok {
-			return
+		cs = append(cs, scored{
+			Milestone{ID: fmt.Sprintf("day-%d", n), Offset: off, Title: milestoneTitleDays(n)},
+			milestoneKindPriority(n),
+		})
+	}
+	for n := range hSet {
+		off := time.Duration(n) * time.Hour
+		if off <= 0 {
+			continue
 		}
-		byNano[nano] = Milestone{ID: id, Offset: off, Title: title}
+		cs = append(cs, scored{
+			Milestone{ID: fmt.Sprintf("hour-%d", n), Offset: off, Title: milestoneTitleHours(n)},
+			milestoneKindPriority(n),
+		})
+	}
+	for n := range mSet {
+		off := time.Duration(n) * time.Minute
+		if off <= 0 {
+			continue
+		}
+		cs = append(cs, scored{
+			Milestone{ID: fmt.Sprintf("min-%d", n), Offset: off, Title: milestoneTitleMinutes(n)},
+			milestoneKindPriority(n),
+		})
+	}
+	for n := range sSet {
+		off := time.Duration(n) * time.Second
+		if off <= 0 {
+			continue
+		}
+		cs = append(cs, scored{
+			Milestone{ID: fmt.Sprintf("sec-%d", n), Offset: off, Title: milestoneTitleSeconds(n)},
+			milestoneKindPriority(n),
+		})
 	}
 
-	beautDays := collectBeautifulInts(milestoneMaxDays)
-	for n := range beautDays {
-		merge(time.Duration(n)*24*time.Hour, fmt.Sprintf("day-%d", n), milestoneTitleDays(n))
-	}
-
-	beautH := collectBeautifulInts(milestoneMaxHours)
-	for n := range beautH {
-		merge(time.Duration(n)*time.Hour, fmt.Sprintf("hour-%d", n), milestoneTitleHours(n))
-	}
-
-	beautM := collectBeautifulInts(milestoneMaxMinutes)
-	for n := range beautM {
-		merge(time.Duration(n)*time.Minute, fmt.Sprintf("min-%d", n), milestoneTitleMinutes(n))
-	}
-
-	beautS := collectBeautifulInts(milestoneMaxSeconds)
-	for n := range beautS {
-		merge(time.Duration(n)*time.Second, fmt.Sprintf("sec-%d", n), milestoneTitleSeconds(n))
+	byNano := make(map[int64]Milestone)
+	for _, c := range cs {
+		nano := c.m.Offset.Nanoseconds()
+		if ex, ok := byNano[nano]; ok {
+			if c.pri > milestoneKindPriorityFromMilestone(ex) {
+				byNano[nano] = c.m
+			}
+			continue
+		}
+		byNano[nano] = c.m
 	}
 
 	list := make([]Milestone, 0, len(byNano))
@@ -164,9 +213,67 @@ func addStepPalindromesUpTo(max int, res map[int]struct{}) {
 			if !isStepPalindrome(p) {
 				continue
 			}
+			if stepPalindromeSuppressedByRepdigitTwin(p, max) {
+				continue
+			}
 			res[p] = struct{}{}
 		}
 	}
+}
+
+// stepPalindromeSuppressedByRepdigitTwin: длинные (≥6 цифр) ступенчатые палиндромы уступают репдигиту той же длины
+// и с той же первой цифрой (456654 vs 444444), если тот попадает в диапазон.
+func stepPalindromeSuppressedByRepdigitTwin(p, max int) bool {
+	s := strconv.Itoa(p)
+	if len(s) < 6 {
+		return false
+	}
+	twin := stepPalindromeRepdigitTwinFrom(p)
+	if twin == p || twin > max {
+		return false
+	}
+	return isRepdigit(twin)
+}
+
+func isRepdigit(n int) bool {
+	s := strconv.Itoa(n)
+	if len(s) < 2 {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] != s[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func milestoneKindPriority(n int) int {
+	if isRepdigit(n) {
+		return milestonePriRepdigit
+	}
+	if isStepPalindrome(n) {
+		return milestonePriStepPalindrome
+	}
+	return milestonePriOther
+}
+
+func milestoneKindPriorityFromMilestone(m Milestone) int {
+	n, ok := parseMilestoneIDNumber(m.ID)
+	if !ok {
+		return milestonePriOther
+	}
+	return milestoneKindPriority(n)
+}
+
+func parseMilestoneIDNumber(id string) (int, bool) {
+	for _, prefix := range []string{"day-", "hour-", "min-", "sec-"} {
+		if strings.HasPrefix(id, prefix) {
+			n, err := strconv.Atoi(id[len(prefix):])
+			return n, err == nil
+		}
+	}
+	return 0, false
 }
 
 func isStepPalindrome(p int) bool {

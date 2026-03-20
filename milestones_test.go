@@ -132,3 +132,32 @@ func TestIsStepPalindrome(t *testing.T) {
 		}
 	}
 }
+
+func TestStepPalindromeSuppressedByRepdigitTwin(t *testing.T) {
+	max := 500_000
+	m := collectBeautifulInts(max)
+	if _, ok := m[456654]; ok {
+		t.Fatal("456654 should lose to repdigit 444444")
+	}
+	if _, ok := m[444444]; !ok {
+		t.Fatal("444444 should remain")
+	}
+	if _, ok := m[123321]; ok {
+		t.Fatal("123321 (6-digit step) should lose to 111111")
+	}
+	if _, ok := m[12321]; !ok {
+		t.Fatal("12321 (5-digit) should remain")
+	}
+}
+
+func TestMilestoneKindPriority(t *testing.T) {
+	if milestoneKindPriority(444444) <= milestoneKindPriority(456654) {
+		t.Fatal("repdigit should rank above step palindrome for merge")
+	}
+	if milestoneKindPriority(456654) <= milestoneKindPriority(3600) {
+		t.Fatal("step palindrome should rank above a plain milestone number")
+	}
+	if isStepPalindrome(3600) {
+		t.Fatal("sanity: 3600 should not be step palindrome")
+	}
+}
