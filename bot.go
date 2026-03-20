@@ -245,6 +245,10 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 			return err
 		}
 		return b.sendText(msg.Chat.ID, "Все автоматические напоминания выключены.")
+	case "milestone_notify":
+		return b.setMilestoneNotifyEach(ctx, userCtx, msg.Chat.ID, args)
+	case "milestone_report":
+		return b.setMilestoneReportToday(ctx, userCtx, msg.Chat.ID, args)
 	case "addreminder":
 		if args != "" {
 			return b.applyCustomReminder(ctx, userCtx, msg.Chat.ID, args)
@@ -471,6 +475,19 @@ func (b *SleepBot) processReminders(ctx context.Context) error {
 				_ = b.store.MarkCustomReminderFired(ctx, reminder.ID, currentDate)
 			}
 		}
+
+		if target.Settings.RemindersEnabled && target.Settings.MilestoneNotifyEach && len(target.Members) > 0 && target.Child.BirthDate != nil {
+			loc := b.mustLocation(target.Family.Timezone)
+			anchor, ok := BirthAnchorLocal(target.Child.BirthDate, loc)
+			if ok && !anchor.After(now) {
+				ForEachMilestoneDueForNotify(anchor, now, func(m Milestone) {
+					key := fmt.Sprintf("milestone:%s", m.ID)
+					if okSent, err := b.store.TryMarkNotificationSent(ctx, target.Family.ID, key); err == nil && okSent {
+						b.broadcast(target.Members, FormatMilestonePushMessage(target.Child.Name, m.Title))
+					}
+				})
+			}
+		}
 	}
 
 	return nil
@@ -487,7 +504,7 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 		"`Добавить сон`, `Исправить последний сон`, `Отчеты`, `Напоминания`, `Настройки`",
 		"",
 		"Полезные команды:",
-		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/reminders`, `/settings`, `/cancel`",
+		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/reminders`, `/settings`, `/milestone_notify on|off`, `/milestone_report on|off`, `/cancel`",
 	}, "\n")
 
 	active, _ := b.store.GetActiveSleep(context.Background(), userCtx.Child.ID)
@@ -546,7 +563,9 @@ func (b *SleepBot) sendDashboard(ctx context.Context, userCtx UserContext, chatI
 	if err != nil {
 		return err
 	}
-	report := BuildDashboardReport(userCtx.Child.Name, sessions, active, b.mustLocation(userCtx.Family.Timezone), time.Now())
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	report := BuildDashboardReport(userCtx.Child.Name, sessions, active, loc, time.Now())
+	report = b.appendMilestoneReportBlock(userCtx, report, time.Now().In(loc))
 	return b.sendText(chatID, report)
 }
 
@@ -560,7 +579,9 @@ func (b *SleepBot) sendDayReport(ctx context.Context, userCtx UserContext, chatI
 	if err != nil {
 		return err
 	}
-	report := BuildDayReport(sessions, active, time.Now().In(loc), loc)
+	day := time.Now().In(loc)
+	report := BuildDayReport(sessions, active, day, loc)
+	report = b.appendMilestoneReportBlock(userCtx, report, day)
 	return b.sendText(chatID, report)
 }
 
@@ -592,6 +613,10 @@ func (b *SleepBot) sendSettings(ctx context.Context, userCtx UserContext, chatID
 	lines = append(lines, "`/settimezone Europe/Moscow`")
 	lines = append(lines, "`/setbirthdate 16.03.2026`")
 	lines = append(lines, "`/editlast`")
+	lines = append(lines, "")
+	lines = append(lines, "Красивые даты (от полуночи дня рождения в вашей таймзоне):")
+	lines = append(lines, fmt.Sprintf("Уведомления о каждой вехе: %s (`/milestone_notify on|off`)", milestoneOnOff(userCtx.Settings.MilestoneNotifyEach)))
+	lines = append(lines, fmt.Sprintf("Список в отчётах: %s (`/milestone_report on|off`)", milestoneOnOff(userCtx.Settings.MilestoneReportToday)))
 	return b.sendText(chatID, strings.Join(lines, "\n"))
 }
 
@@ -603,12 +628,15 @@ func (b *SleepBot) sendReminders(ctx context.Context, userCtx UserContext, chatI
 	var lines []string
 	lines = append(lines, "Напоминания:")
 	lines = append(lines, fmt.Sprintf("Включены: %t", userCtx.Settings.RemindersEnabled))
+	lines = append(lines, fmt.Sprintf("Красивые даты — уведомления: %s", milestoneOnOff(userCtx.Settings.MilestoneNotifyEach)))
+	lines = append(lines, fmt.Sprintf("Красивые даты — в отчётах: %s", milestoneOnOff(userCtx.Settings.MilestoneReportToday)))
 	lines = append(lines, fmt.Sprintf("Окно бодрствования: %d мин", userCtx.Settings.WakeWindowMinutes))
 	lines = append(lines, fmt.Sprintf("Слишком долгий сон: %d мин", userCtx.Settings.MaxSleepMinutes))
 	lines = append(lines, fmt.Sprintf("Нет записей: %d мин", userCtx.Settings.InactivityMinutes))
 	lines = append(lines, "")
 	lines = append(lines, "Команды:")
 	lines = append(lines, "`/reminders_on`, `/reminders_off`")
+	lines = append(lines, "`/milestone_notify on|off`, `/milestone_report on|off`")
 	lines = append(lines, "`/setwake 90`, `/setmaxsleep 120`, `/setinactive 240`")
 	lines = append(lines, "`/addreminder 19:30 Купание`")
 	if len(custom) > 0 {
@@ -620,6 +648,72 @@ func (b *SleepBot) sendReminders(ctx context.Context, userCtx UserContext, chatI
 		lines = append(lines, "Удаление: `/deletereminder ID`")
 	}
 	return b.sendText(chatID, strings.Join(lines, "\n"))
+}
+
+func milestoneOnOff(on bool) string {
+	if on {
+		return "вкл"
+	}
+	return "выкл"
+}
+
+func parseOnOffArg(raw string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "on", "1", "да", "вкл", "true":
+		return true, true
+	case "off", "0", "нет", "выкл", "false":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func (b *SleepBot) appendMilestoneReportBlock(userCtx UserContext, base string, calendarDay time.Time) string {
+	if !userCtx.Settings.MilestoneReportToday || userCtx.Child.BirthDate == nil {
+		return base
+	}
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	anchor, ok := BirthAnchorLocal(userCtx.Child.BirthDate, loc)
+	if !ok {
+		return base
+	}
+	ms := MilestonesOnLocalCalendarDay(anchor, calendarDay, loc)
+	if len(ms) == 0 {
+		return base
+	}
+	block := FormatMilestoneReportBlock(userCtx.Child.Name, ms, loc, anchor)
+	if block == "" {
+		return base
+	}
+	return base + "\n\n" + block
+}
+
+func (b *SleepBot) setMilestoneNotifyEach(ctx context.Context, userCtx UserContext, chatID int64, args string) error {
+	on, ok := parseOnOffArg(args)
+	if !ok {
+		return b.sendText(chatID, "Использование: `/milestone_notify on` или `/milestone_notify off`")
+	}
+	if err := b.store.SetMilestoneNotifyEach(ctx, userCtx.Family.ID, on); err != nil {
+		return err
+	}
+	if on {
+		return b.sendText(chatID, "Уведомления о красивых датах включены. Отправка — только при включённых напоминаниях (`/reminders_on`). Нужна дата рождения (`/setbirthdate`).")
+	}
+	return b.sendText(chatID, "Уведомления о красивых датах выключены.")
+}
+
+func (b *SleepBot) setMilestoneReportToday(ctx context.Context, userCtx UserContext, chatID int64, args string) error {
+	on, ok := parseOnOffArg(args)
+	if !ok {
+		return b.sendText(chatID, "Использование: `/milestone_report on` или `/milestone_report off`")
+	}
+	if err := b.store.SetMilestoneReportToday(ctx, userCtx.Family.ID, on); err != nil {
+		return err
+	}
+	if on {
+		return b.sendText(chatID, "В отчётах будет список сегодняшних красивых дат. Нужна дата рождения (`/setbirthdate`).")
+	}
+	return b.sendText(chatID, "Список красивых дат в отчётах выключен.")
 }
 
 func (b *SleepBot) updateReminderThreshold(ctx context.Context, userCtx UserContext, chatID int64, field string, args string) error {

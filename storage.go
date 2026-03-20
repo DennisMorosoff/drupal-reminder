@@ -63,14 +63,16 @@ type SleepSession struct {
 }
 
 type ReminderSettings struct {
-	FamilyID          int64
-	RemindersEnabled  bool
-	WakeWindowEnabled bool
-	MaxSleepEnabled   bool
-	InactivityEnabled bool
-	WakeWindowMinutes int
-	MaxSleepMinutes   int
-	InactivityMinutes int
+	FamilyID              int64
+	RemindersEnabled      bool
+	WakeWindowEnabled     bool
+	MaxSleepEnabled       bool
+	InactivityEnabled     bool
+	WakeWindowMinutes     int
+	MaxSleepMinutes       int
+	InactivityMinutes     int
+	MilestoneNotifyEach   bool
+	MilestoneReportToday  bool
 }
 
 type CustomReminder struct {
@@ -218,6 +220,21 @@ func (s *Store) initSchema() error {
 		}
 	}
 
+	return s.migrateMilestoneSettingsColumns()
+}
+
+func (s *Store) migrateMilestoneSettingsColumns() error {
+	stmts := []string{
+		`ALTER TABLE reminder_settings ADD COLUMN milestone_notify_each INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE reminder_settings ADD COLUMN milestone_report_today INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, stmt := range stmts {
+		if _, err := s.db.Exec(stmt); err != nil {
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				return fmt.Errorf("migrate reminder_settings: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -263,8 +280,10 @@ func (s *Store) EnsureMember(ctx context.Context, telegramUserID int64, telegram
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO reminder_settings(
 			family_id, reminders_enabled, wake_window_enabled, max_sleep_enabled, inactivity_enabled,
-			wake_window_minutes, max_sleep_minutes, inactivity_minutes, created_at, updated_at
-		) VALUES (?, 1, 1, 1, 1, 90, 120, 240, ?, ?)`,
+			wake_window_minutes, max_sleep_minutes, inactivity_minutes,
+			milestone_notify_each, milestone_report_today,
+			created_at, updated_at
+		) VALUES (?, 1, 1, 1, 1, 90, 120, 240, 0, 0, ?, ?)`,
 		familyID, now, now,
 	); err != nil {
 		return UserContext{}, false, err
@@ -378,7 +397,8 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 			f.id, f.name, f.timezone,
 			c.id, c.family_id, c.name, c.birth_date,
 			rs.family_id, rs.reminders_enabled, rs.wake_window_enabled, rs.max_sleep_enabled, rs.inactivity_enabled,
-			rs.wake_window_minutes, rs.max_sleep_minutes, rs.inactivity_minutes
+			rs.wake_window_minutes, rs.max_sleep_minutes, rs.inactivity_minutes,
+			COALESCE(rs.milestone_notify_each, 0), COALESCE(rs.milestone_report_today, 0)
 		FROM family_members m
 		JOIN families f ON f.id = m.family_id
 		JOIN children c ON c.family_id = f.id
@@ -396,6 +416,8 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 		wakeOn          int
 		maxSleepOn      int
 		inactivityOn    int
+		milestonePush   int
+		milestoneReport int
 	)
 
 	err := s.db.QueryRowContext(ctx, query, telegramUserID).Scan(
@@ -404,6 +426,7 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 		&child.ID, &child.FamilyID, &child.Name, &birthDateString,
 		&settings.FamilyID, &remindersOn, &wakeOn, &maxSleepOn, &inactivityOn,
 		&settings.WakeWindowMinutes, &settings.MaxSleepMinutes, &settings.InactivityMinutes,
+		&milestonePush, &milestoneReport,
 	)
 	if err != nil {
 		return UserContext{}, err
@@ -413,6 +436,8 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 	settings.WakeWindowEnabled = wakeOn == 1
 	settings.MaxSleepEnabled = maxSleepOn == 1
 	settings.InactivityEnabled = inactivityOn == 1
+	settings.MilestoneNotifyEach = milestonePush == 1
+	settings.MilestoneReportToday = milestoneReport == 1
 
 	if birthDateString.Valid && strings.TrimSpace(birthDateString.String) != "" {
 		if parsed, parseErr := time.Parse("2006-01-02", birthDateString.String); parseErr == nil {
@@ -430,9 +455,10 @@ func (s *Store) GetUserContext(ctx context.Context, telegramUserID int64) (UserC
 
 func (s *Store) GetReminderTargets(ctx context.Context) ([]ReminderTarget, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.id, f.name, f.timezone, c.id, c.name,
+		SELECT f.id, f.name, f.timezone, c.id, c.name, c.birth_date,
 			rs.reminders_enabled, rs.wake_window_enabled, rs.max_sleep_enabled, rs.inactivity_enabled,
-			rs.wake_window_minutes, rs.max_sleep_minutes, rs.inactivity_minutes
+			rs.wake_window_minutes, rs.max_sleep_minutes, rs.inactivity_minutes,
+			COALESCE(rs.milestone_notify_each, 0), COALESCE(rs.milestone_report_today, 0)
 		FROM families f
 		JOIN children c ON c.family_id = f.id
 		JOIN reminder_settings rs ON rs.family_id = f.id
@@ -446,17 +472,21 @@ func (s *Store) GetReminderTargets(ctx context.Context) ([]ReminderTarget, error
 	var targets []ReminderTarget
 	for rows.Next() {
 		var (
-			target       ReminderTarget
-			remindersOn  int
-			wakeOn       int
-			maxSleepOn   int
-			inactivityOn int
+			target          ReminderTarget
+			birthDateString sql.NullString
+			remindersOn     int
+			wakeOn          int
+			maxSleepOn      int
+			inactivityOn    int
+			milestonePush   int
+			milestoneReport int
 		)
 		if err := rows.Scan(
 			&target.Family.ID, &target.Family.Name, &target.Family.Timezone,
-			&target.Child.ID, &target.Child.Name,
+			&target.Child.ID, &target.Child.Name, &birthDateString,
 			&remindersOn, &wakeOn, &maxSleepOn, &inactivityOn,
 			&target.Settings.WakeWindowMinutes, &target.Settings.MaxSleepMinutes, &target.Settings.InactivityMinutes,
+			&milestonePush, &milestoneReport,
 		); err != nil {
 			return nil, err
 		}
@@ -465,6 +495,14 @@ func (s *Store) GetReminderTargets(ctx context.Context) ([]ReminderTarget, error
 		target.Settings.WakeWindowEnabled = wakeOn == 1
 		target.Settings.MaxSleepEnabled = maxSleepOn == 1
 		target.Settings.InactivityEnabled = inactivityOn == 1
+		target.Settings.MilestoneNotifyEach = milestonePush == 1
+		target.Settings.MilestoneReportToday = milestoneReport == 1
+
+		if birthDateString.Valid && strings.TrimSpace(birthDateString.String) != "" {
+			if parsed, parseErr := time.Parse("2006-01-02", birthDateString.String); parseErr == nil {
+				target.Child.BirthDate = &parsed
+			}
+		}
 
 		members, err := s.GetFamilyMembers(ctx, target.Family.ID)
 		if err != nil {
@@ -793,6 +831,22 @@ func (s *Store) SetChildBirthDate(ctx context.Context, familyID int64, birthDate
 func (s *Store) SetReminderEnabled(ctx context.Context, familyID int64, enabled bool) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE reminder_settings SET reminders_enabled = ?, updated_at = ? WHERE family_id = ?`,
+		boolToInt(enabled), s.nowUTCString(), familyID,
+	)
+	return err
+}
+
+func (s *Store) SetMilestoneNotifyEach(ctx context.Context, familyID int64, enabled bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE reminder_settings SET milestone_notify_each = ?, updated_at = ? WHERE family_id = ?`,
+		boolToInt(enabled), s.nowUTCString(), familyID,
+	)
+	return err
+}
+
+func (s *Store) SetMilestoneReportToday(ctx context.Context, familyID int64, enabled bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE reminder_settings SET milestone_report_today = ?, updated_at = ? WHERE family_id = ?`,
 		boolToInt(enabled), s.nowUTCString(), familyID,
 	)
 	return err
