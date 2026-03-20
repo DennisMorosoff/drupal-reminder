@@ -162,6 +162,29 @@ func TestNextMilestoneAtOrAfter(t *testing.T) {
 	}
 }
 
+func TestNextMilestoneShownInDailyReportRespectsFilter(t *testing.T) {
+	loc := time.UTC
+	anchor := time.Date(2020, 1, 1, 0, 0, 0, 0, loc)
+
+	// В 2020-01-06 в списке минут при наличии 7777 7887 фильтруется.
+	from := anchor.Add(5*24*time.Hour + 10*time.Hour)
+	day := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, loc)
+	ms := MilestonesOnLocalCalendarDay(anchor, day, loc)
+	for _, m := range ms {
+		if m.ID == "min-7887" {
+			t.Fatal("sanity: min-7887 should be filtered out of daily report")
+		}
+	}
+
+	next, _, ok := NextMilestoneShownInDailyReportAtOrAfter(anchor, from, loc)
+	if !ok {
+		t.Fatal("expected a next milestone for daily report")
+	}
+	if next.ID == "min-7887" {
+		t.Fatal("next milestone should not be a filtered-out one")
+	}
+}
+
 func TestPalindromeFromHalf(t *testing.T) {
 	p, err := palindromeFromHalf(12, false)
 	if err != nil || p != 1221 {

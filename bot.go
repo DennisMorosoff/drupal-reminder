@@ -687,7 +687,7 @@ func (b *SleepBot) appendMilestoneReportBlock(userCtx UserContext, base string, 
 		if !isToday {
 			return base
 		}
-		next, at, ok := NextMilestoneAtOrAfter(anchor, nowLocal)
+		next, at, ok := NextMilestoneShownInDailyReportAtOrAfter(anchor, nowLocal, loc)
 		if !ok {
 			return base
 		}

@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
-// Максимумы для генерации вех (покрывают несколько десятилетий жизни).
+// Максимумы для генерации вех (покрывают продолжительный диапазон возраста).
 const (
-	milestoneMaxDays    = 8000
+	// 40000 дней ~= 110 лет. Раньше было ~22 года (8000 дней), и для взрослых старше
+	// этого возраста "следующая" красивая веха не находилась — fallback в отчёте не срабатывал.
+	milestoneMaxDays    = 40000
 	milestoneMaxHours   = milestoneMaxDays * 24
 	milestoneMaxMinutes = milestoneMaxDays * 24 * 60
 	milestoneMaxSeconds = milestoneMaxDays * 24 * 60 * 60
@@ -378,7 +380,37 @@ func MilestonesOccurredBetween(anchor time.Time, from, to time.Time) []Milestone
 	return out
 }
 
-// NextMilestoneAtOrAfter возвращает ближайшую веху на или после момента from.
+// NextMilestoneShownInDailyReportAtOrAfter возвращает ближайшую веху,
+// которая реально оказалась бы в ежедневном отчёте (с учётом суточного фильтра).
+func NextMilestoneShownInDailyReportAtOrAfter(anchor, from time.Time, loc *time.Location) (Milestone, time.Time, bool) {
+	if loc == nil {
+		return Milestone{}, time.Time{}, false
+	}
+	sched := milestoneScheduleSorted()
+	if len(sched) == 0 {
+		return Milestone{}, time.Time{}, false
+	}
+
+	// Конец диапазона: последний момент, который вообще существует в расписании.
+	lastAt := anchor.Add(sched[len(sched)-1].Offset).In(loc)
+	day := time.Date(from.In(loc).Year(), from.In(loc).Month(), from.In(loc).Day(), 0, 0, 0, 0, loc)
+
+	for !day.After(lastAt) {
+		ms := MilestonesOnLocalCalendarDay(anchor, day, loc)
+		// В пределах дня ms уже отсортирован по Offset, но отсекаем то, что "раньше чем from".
+		for _, m := range ms {
+			at := anchor.Add(m.Offset).In(loc)
+			if !at.Before(from) {
+				return m, at, true
+			}
+		}
+		day = day.Add(24 * time.Hour)
+	}
+	return Milestone{}, time.Time{}, false
+}
+
+// NextMilestoneAtOrAfter возвращает ближайшую веху на или после момента from (без суточного фильтра).
+// Оставлено как утилита.
 func NextMilestoneAtOrAfter(anchor, from time.Time) (Milestone, time.Time, bool) {
 	for _, m := range milestoneScheduleSorted() {
 		at := anchor.Add(m.Offset)
