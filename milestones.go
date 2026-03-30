@@ -409,6 +409,42 @@ func NextMilestoneShownInDailyReportAtOrAfter(anchor, from time.Time, loc *time.
 	return Milestone{}, time.Time{}, false
 }
 
+// NextMilestonesShownInDailyReportAtOrAfter возвращает первые `count` вех
+// которые реально попали бы в ежедневные отчёты (с учётом суточного фильтра),
+// но выбирает их как «ближайшие по времени» относительно from.
+func NextMilestonesShownInDailyReportAtOrAfter(anchor, from time.Time, loc *time.Location, count int) []Milestone {
+	if loc == nil || count <= 0 {
+		return nil
+	}
+	sched := milestoneScheduleSorted()
+	if len(sched) == 0 {
+		return nil
+	}
+
+	// Конец диапазона: последний момент, который вообще существует в расписании.
+	lastAt := anchor.Add(sched[len(sched)-1].Offset).In(loc)
+
+	day := time.Date(from.In(loc).Year(), from.In(loc).Month(), from.In(loc).Day(), 0, 0, 0, 0, loc)
+	out := make([]Milestone, 0, count)
+
+	for !day.After(lastAt) && len(out) < count {
+		ms := MilestonesOnLocalCalendarDay(anchor, day, loc)
+		// В пределах дня ms уже отсортирован по Offset, но отсекаем то, что "раньше чем from".
+		for _, m := range ms {
+			at := anchor.Add(m.Offset).In(loc)
+			if !at.Before(from) {
+				out = append(out, m)
+				if len(out) >= count {
+					return out
+				}
+			}
+		}
+		day = day.Add(24 * time.Hour)
+	}
+
+	return out
+}
+
 // NextMilestoneAtOrAfter возвращает ближайшую веху на или после момента from (без суточного фильтра).
 // Оставлено как утилита.
 func NextMilestoneAtOrAfter(anchor, from time.Time) (Milestone, time.Time, bool) {
@@ -523,7 +559,7 @@ func milestoneScalePrefix(id string) string {
 	return ""
 }
 
-// Сколько вех показывать в отчёте (полный список за сутки может быть тысячами строк и превысит лимит Telegram 4096).
+// Сколько вех показывать в отчёте (полный список может быть очень длинным).
 const milestoneReportMaxLines = 50
 
 // FormatMilestoneReportBlock форматирует блок для отчёта; пустая строка, если нечего показать.
@@ -538,16 +574,16 @@ func FormatMilestoneReportBlock(childName string, milestones []Milestone, loc *t
 	}
 	var b strings.Builder
 	if childName != "" {
-		b.WriteString(fmt.Sprintf("Красивые даты сегодня (%s):\n", childName))
+		b.WriteString(fmt.Sprintf("Ближайшие красивые даты (%s):\n", childName))
 	} else {
-		b.WriteString("Красивые даты сегодня:\n")
+		b.WriteString("Ближайшие красивые даты:\n")
 	}
 	for _, m := range milestones {
 		at := anchor.Add(m.Offset).In(loc)
-		b.WriteString(fmt.Sprintf("• %s — в %s\n", m.Title, at.Format("15:04")))
+		b.WriteString(fmt.Sprintf("• %s — %s\n", m.Title, formatLocalDateTime(at, loc)))
 	}
 	if extra > 0 {
-		b.WriteString(fmt.Sprintf("… и ещё %d вех за этот календарный день.\n", extra))
+		b.WriteString(fmt.Sprintf("… и ещё %d вех.\n", extra))
 	}
 	return strings.TrimSuffix(b.String(), "\n")
 }

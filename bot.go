@@ -804,22 +804,8 @@ func (b *SleepBot) appendMilestoneReportBlock(userCtx UserContext, base string, 
 	if !ok {
 		return base
 	}
-	ms := MilestonesOnLocalCalendarDay(anchor, calendarDay, loc)
-	if len(ms) == 0 {
-		nowLocal := time.Now().In(loc)
-		d := calendarDay.In(loc)
-		isToday := d.Year() == nowLocal.Year() && d.Month() == nowLocal.Month() && d.Day() == nowLocal.Day()
-		if !isToday {
-			return base
-		}
-		next, at, ok := NextMilestoneShownInDailyReportAtOrAfter(anchor, nowLocal, loc)
-		if !ok {
-			return base
-		}
-		child := escapeTelegramMarkdown(userCtx.Child.Name)
-		line := fmt.Sprintf("Сегодня красивых дат нет. Ближайшая (%s): %s — %s.", child, next.Title, formatLocalDateTime(at, loc))
-		return base + "\n\n" + line
-	}
+	from := calendarDay.In(loc)
+	ms := NextMilestonesShownInDailyReportAtOrAfter(anchor, from, loc, 3)
 	block := FormatMilestoneReportBlock(escapeTelegramMarkdown(userCtx.Child.Name), ms, loc, anchor)
 	if block == "" {
 		return base
@@ -850,7 +836,7 @@ func (b *SleepBot) setMilestoneReportToday(ctx context.Context, userCtx UserCont
 		return err
 	}
 	if on {
-		return b.sendText(chatID, "В отчётах будет список сегодняшних красивых дат. Нужна дата рождения (`/setbirthdate`).")
+		return b.sendText(chatID, "В отчётах будет список ближайших 3 красивых дат. Нужна дата рождения (`/setbirthdate`).")
 	}
 	return b.sendText(chatID, "Список красивых дат в отчётах выключен.")
 }
