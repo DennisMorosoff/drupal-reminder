@@ -55,14 +55,27 @@ var (
 	milestoneScheduleOnce sync.Once
 )
 
-// BirthAnchorLocal полночь календарной даты рождения в таймзоне семьи
-// (календарный день берётся по местному времени семьи, а не по UTC).
+// BirthAnchorLocal момент рождения в таймзоне семьи.
+//
+// Для исторических записей, когда дата рождения вводилась как "только дата"
+// и в БД она могла храниться как полночь UTC, применяем совместимость:
+// считаем якорем полночь локальной календарной даты.
 func BirthAnchorLocal(birth *time.Time, loc *time.Location) (time.Time, bool) {
 	if birth == nil || loc == nil {
 		return time.Time{}, false
 	}
-	y, m, d := birth.In(loc).Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, loc), true
+	bLoc := birth.In(loc)
+
+	// Heuristics for legacy "date only" (stored as midnight UTC).
+	// If time part is exactly 00:00:00 at UTC, treat it as date-only and anchor
+	// at local midnight of the same calendar date in the family timezone.
+	if birth.Location() == time.UTC && birth.Hour() == 0 && birth.Minute() == 0 && birth.Second() == 0 && birth.Nanosecond() == 0 {
+		y, m, d := bLoc.Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, loc), true
+	}
+
+	// For full birth datetime: keep the exact time, only switch timezone.
+	return bLoc, true
 }
 
 func milestoneScheduleSorted() []Milestone {

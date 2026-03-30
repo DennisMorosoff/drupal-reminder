@@ -22,7 +22,7 @@ Telegram bot for tracking a newborn's sleep in real time and retroactively.
   - current sleep is too long
   - too long without any sleep records
   - custom reminders
-- Optional **milestone dates** (life duration from **midnight** of the birth **calendar date** in the family timezone): push per milestone (`/milestone_notify on|off`, requires `/reminders_on`) and/or a “today’s milestones” block in `/report` and `/day` (`/milestone_report on|off`). Milestones older than 24h are not backfilled when enabling pushes.
+- Optional **milestone dates** (life duration from the **birth moment** in the family timezone): push per milestone (`/milestone_notify on|off`, requires `/reminders_on`) and/or a “today’s milestones” block in `/report` and `/day` (`/milestone_report on|off`). Milestones older than 24h are not backfilled when enabling pushes.
 - SQLite database for persistent storage
 
 ## Quick Start
