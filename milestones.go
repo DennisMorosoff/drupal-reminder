@@ -404,7 +404,8 @@ func NextMilestoneShownInDailyReportAtOrAfter(anchor, from time.Time, loc *time.
 				return m, at, true
 			}
 		}
-		day = day.Add(24 * time.Hour)
+		// Шаг по "календарному дню" в локали, а не по фиксированным 24 часам.
+		day = day.AddDate(0, 0, 1)
 	}
 	return Milestone{}, time.Time{}, false
 }
@@ -439,7 +440,8 @@ func NextMilestonesShownInDailyReportAtOrAfter(anchor, from time.Time, loc *time
 				}
 			}
 		}
-		day = day.Add(24 * time.Hour)
+		// Шаг по "календарному дню" в локали, а не по фиксированным 24 часам.
+		day = day.AddDate(0, 0, 1)
 	}
 
 	return out
@@ -477,7 +479,8 @@ func ForEachMilestoneDueForNotify(anchor, now time.Time, loc *time.Location, fn 
 				fn(m)
 			}
 		}
-		day = day.Add(24 * time.Hour)
+		// Шаг по "календарному дню" в локали, а не по фиксированным 24 часам.
+		day = day.AddDate(0, 0, 1)
 	}
 }
 
@@ -488,7 +491,8 @@ func MilestonesOnLocalCalendarDay(anchor time.Time, day time.Time, loc *time.Loc
 	}
 	d := day.In(loc)
 	start := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
-	end := start.Add(24 * time.Hour)
+	// Конец — следующий локальный полуночный "тик", а не start+24h.
+	end := start.AddDate(0, 0, 1)
 
 	var out []Milestone
 	for _, m := range milestoneScheduleSorted() {

@@ -91,6 +91,25 @@ func TestBuildSleepTableRowSplitsSleepAcrossMidnight(t *testing.T) {
 	}
 }
 
+func TestDayHasAnySleepRespectsDSTDayBoundary(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("timezone not available: %v", err)
+	}
+
+	// В New York в 2021-03-14 начинается DST, локальные сутки короче 24 часов.
+	day := time.Date(2021, 3, 14, 0, 0, 0, 0, loc)
+
+	// Сон начался на следующем календарном дне, но в первые часы.
+	start := time.Date(2021, 3, 15, 0, 30, 0, 0, loc).UTC()
+	end := time.Date(2021, 3, 15, 1, 30, 0, 0, loc).UTC()
+	session := SleepSession{StartAt: start, EndAt: &end}
+
+	if dayHasAnySleep([]SleepSession{session}, day, loc) {
+		t.Fatalf("expected no sleep on %v local day, but it was detected", day.Format(time.RFC3339))
+	}
+}
+
 func TestBuildRangeReportIncludesSleepTable(t *testing.T) {
 	loc := time.FixedZone("UTC+3", 3*60*60)
 	end := time.Date(2026, 3, 16, 12, 0, 0, 0, loc)

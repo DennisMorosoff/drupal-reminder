@@ -123,13 +123,16 @@ func SummarizeDay(sessions []SleepSession, day time.Time, loc *time.Location) Da
 func SummarizeRange(sessions []SleepSession, end time.Time, days int, loc *time.Location) (int, time.Duration, time.Duration) {
 	var count int
 	var total time.Duration
-	startDate := time.Date(end.In(loc).Year(), end.In(loc).Month(), end.In(loc).Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -(days - 1))
+	endLocal := end.In(loc)
+	startDate := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -(days - 1))
+	// Эксклюзивная граница: следующий локальный полуночный "тик".
+	endExclusive := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 1)
 	for _, session := range sessions {
 		if session.EndAt == nil {
 			continue
 		}
 		startLocal := session.StartAt.In(loc)
-		if startLocal.Before(startDate) || startLocal.After(end.In(loc).Add(24*time.Hour)) {
+		if startLocal.Before(startDate) || !startLocal.Before(endExclusive) {
 			continue
 		}
 		count++
@@ -315,7 +318,8 @@ func BuildSleepTable(sessions []SleepSession, end time.Time, days int, loc *time
 
 func dayHasAnySleep(sessions []SleepSession, day time.Time, loc *time.Location) bool {
 	dayStart := startOfDay(day, loc)
-	dayEnd := dayStart.Add(24 * time.Hour)
+	// Конец дня — следующий локальный полуночный "тик", а не start+24h.
+	dayEnd := dayStart.AddDate(0, 0, 1)
 	for _, session := range sessions {
 		if session.EndAt == nil {
 			continue

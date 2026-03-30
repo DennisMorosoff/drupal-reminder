@@ -32,6 +32,66 @@ func TestBirthAnchorLocal(t *testing.T) {
 	}
 }
 
+func TestMilestonesOnLocalCalendarDayRespectsDSTDayBoundary(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("timezone not available: %v", err)
+	}
+
+	// В 2021-03-14 начинается DST (локальные сутки короче 24 часов).
+	anchor := time.Date(2021, 3, 13, 0, 0, 0, 0, loc)
+	day := time.Date(2021, 3, 14, 0, 0, 0, 0, loc)
+	dayStart := time.Date(2021, 3, 14, 0, 0, 0, 0, loc)
+	buggyEnd := dayStart.Add(24 * time.Hour)   // то, что ломалось
+	correctEnd := dayStart.AddDate(0, 0, 1) // следующий локальный полуночный "тик"
+
+	beautifulMinutes := collectBeautifulInts(20_000)
+	var targetAt time.Time
+	var targetID string
+	found := false
+
+	// Берём гарантированно существующую "красивую" веху из множества репдигитов,
+	// чтобы фильтры по шкалам не скрывали проблему.
+	for n := range beautifulMinutes {
+		if !isRepdigit(n) {
+			continue
+		}
+		at := anchor.Add(time.Duration(n) * time.Minute).In(loc)
+		if at.Year() != 2021 || at.Month() != time.March || at.Day() != 15 || at.Hour() != 0 {
+			continue
+		}
+		// Она попадает в "плохую" версию интервала [dayStart, dayStart+24h),
+		// но должна выпадать из корректного интервала [dayStart, nextLocalMidnight).
+		if at.Before(correctEnd) || !at.Before(buggyEnd) {
+			continue
+		}
+
+		// Найдём реальный milestone ID для найденного at (учитывая возможные слияния по offset).
+		for _, m := range milestoneScheduleSorted() {
+			if anchor.Add(m.Offset).In(loc).Equal(at) {
+				targetAt = at
+				targetID = m.ID
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		t.Skip("no suitable DST-boundary milestone candidate found")
+	}
+
+	ms := MilestonesOnLocalCalendarDay(anchor, day, loc)
+	for _, m := range ms {
+		if m.ID == targetID {
+			t.Fatalf("milestone %s at %v incorrectly included in local day %v", targetID, targetAt, dayStart)
+		}
+	}
+}
+
 func TestCollectBeautifulIntsIncludesPatterns(t *testing.T) {
 	m := collectBeautifulInts(10_000)
 	for _, n := range []int{1, 10, 100, 11, 111, 123, 1234, 234} {

@@ -1029,10 +1029,14 @@ func parseSleepRange(input string, now time.Time, loc *time.Location) (time.Time
 	}
 
 	if !endHasDate && !startHasDate && !endAt.After(startAt) {
-		endAt = endAt.Add(24 * time.Hour)
+		// Если пользователь указал только время без дат, то "конец" идёт на следующий
+		// календарный день в локали, а не на +24 часа.
+		endAt = endAt.AddDate(0, 0, 1)
 	}
 	if startHasDate && !endHasDate && !endAt.After(startAt) {
-		endAt = endAt.Add(24 * time.Hour)
+		// Та же логика: конец интервала без даты должен попасть в следующий локальный
+		// календарный день относительно начала.
+		endAt = endAt.AddDate(0, 0, 1)
 	}
 	return startAt.UTC(), endAt.UTC(), nil
 }
