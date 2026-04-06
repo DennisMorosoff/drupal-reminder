@@ -16,6 +16,7 @@ Telegram bot for tracking a newborn's sleep in real time and retroactively.
   - latest nap vs yesterday
   - latest nap vs average over 7 and 30 days
   - day / week / month summaries
+- Export completed sleep records to CSV (`/export_csv`)
 - Two-parent access with invite code
 - Reminders:
   - wake window reached
@@ -52,6 +53,7 @@ go build -o sleepbot .
 - `/day`
 - `/week`
 - `/month`
+- `/export_csv`
 - `/reminders`
 - `/milestone_notify on|off`
 - `/milestone_report on|off`

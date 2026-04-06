@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,9 +25,9 @@ const (
 	stateAwaitingReminder    = "awaiting_custom_reminder"
 
 	// Онбординг нового пользователя/семьи (профиль): имя -> таймзона -> дата рождения.
-	stateOnboardingChildName  = "onboarding_child_name"
-	stateOnboardingTimezone   = "onboarding_timezone"
-	stateOnboardingBirthDate  = "onboarding_birth_date"
+	stateOnboardingChildName = "onboarding_child_name"
+	stateOnboardingTimezone  = "onboarding_timezone"
+	stateOnboardingBirthDate = "onboarding_birth_date"
 )
 
 // Кнопки меню: при нажатии в режиме ввода сбрасываем состояние и обрабатываем как обычное действие.
@@ -247,6 +249,8 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 		return b.sendStatus(ctx, userCtx, msg.Chat.ID)
 	case "report":
 		return b.sendDashboard(ctx, userCtx, msg.Chat.ID)
+	case "export_csv":
+		return b.sendExportCSV(ctx, userCtx, msg.Chat.ID)
 	case "day":
 		return b.sendDayReport(ctx, userCtx, msg.Chat.ID)
 	case "week":
@@ -389,7 +393,7 @@ func (b *SleepBot) handleText(ctx context.Context, userCtx UserContext, msg *tgb
 	case "Настройки":
 		return b.sendSettings(ctx, userCtx, msg.Chat.ID)
 	default:
-		return b.sendTextWithKeyboard(msg.Chat.ID, "Используйте кнопки ниже или команды `/help`, `/report`, `/reminders`, `/settings`.", b.mainKeyboard(false))
+		return b.sendTextWithKeyboard(msg.Chat.ID, "Используйте кнопки ниже или команды `/help`, `/report`, `/export_csv`, `/reminders`, `/settings`.", b.mainKeyboard(false))
 	}
 }
 
@@ -628,7 +632,7 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 		"`/milestone_notify on|off`, `/milestone_report on|off`",
 		"",
 		"Полезные команды:",
-		"`/report`, `/day`, `/week`, `/month`, `/invite`, `/join CODE`, `/settings`, `/cancel`",
+		"`/report`, `/day`, `/week`, `/month`, `/export_csv`, `/invite`, `/join CODE`, `/settings`, `/cancel`",
 		"`/silent_mode` — выключить все уведомления",
 		"`/reset_service confirm` — полная очистка данных",
 	}, "\n")
@@ -722,6 +726,61 @@ func (b *SleepBot) sendRangeReport(ctx context.Context, userCtx UserContext, cha
 	}
 	report := BuildRangeReport(sessions, active, time.Now(), days, b.mustLocation(userCtx.Family.Timezone))
 	return b.sendText(chatID, report)
+}
+
+func (b *SleepBot) sendExportCSV(ctx context.Context, userCtx UserContext, chatID int64) error {
+	sessions, err := b.store.ListAllCompletedSleeps(ctx, userCtx.Child.ID)
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		return b.sendText(chatID, "Пока нет завершенных записей сна для экспорта.")
+	}
+
+	loc := b.mustLocation(userCtx.Family.Timezone)
+	var csvBuf bytes.Buffer
+	writer := csv.NewWriter(&csvBuf)
+
+	if err := writer.Write([]string{
+		"id",
+		"start_at_local",
+		"end_at_local",
+		"duration_min",
+		"start_source",
+		"end_source",
+		"note",
+		"created_by",
+		"updated_by",
+	}); err != nil {
+		return err
+	}
+
+	for _, session := range sessions {
+		if session.EndAt == nil {
+			continue
+		}
+		durationMinutes := int(session.EndAt.Sub(session.StartAt).Minutes())
+		if err := writer.Write([]string{
+			strconv.FormatInt(session.ID, 10),
+			session.StartAt.In(loc).Format(time.RFC3339),
+			session.EndAt.In(loc).Format(time.RFC3339),
+			strconv.Itoa(durationMinutes),
+			session.StartSource,
+			session.EndSource,
+			session.Note,
+			strconv.FormatInt(session.CreatedBy, 10),
+			strconv.FormatInt(session.UpdatedBy, 10),
+		}); err != nil {
+			return err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+
+	filename := fmt.Sprintf("sleep_export_%s.csv", time.Now().In(loc).Format("20060102"))
+	return b.sendDocument(chatID, filename, csvBuf.Bytes())
 }
 
 func (b *SleepBot) sendSettings(ctx context.Context, userCtx UserContext, chatID int64) error {
@@ -906,6 +965,12 @@ func (b *SleepBot) sendTextWithKeyboard(chatID int64, text string, keyboard tgbo
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = "Markdown"
 	msg.ReplyMarkup = keyboard
+	_, err := b.api.Send(msg)
+	return err
+}
+
+func (b *SleepBot) sendDocument(chatID int64, filename string, payload []byte) error {
+	msg := tgbotapi.NewDocument(chatID, tgbotapi.FileBytes{Name: filename, Bytes: payload})
 	_, err := b.api.Send(msg)
 	return err
 }

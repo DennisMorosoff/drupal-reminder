@@ -42,6 +42,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("telegram init error: %v", err)
 	}
+	registerTelegramCommands(botAPI)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -87,6 +88,28 @@ func startHealthServer(ctx context.Context) {
 			log.Printf("health server shutdown error: %v", err)
 		}
 	}()
+}
+
+func registerTelegramCommands(botAPI *tgbotapi.BotAPI) {
+	commands := []tgbotapi.BotCommand{
+		{Command: "start", Description: "Показать приветствие и список команд"},
+		{Command: "help", Description: "Показать подсказки по использованию"},
+		{Command: "report", Description: "Общий отчет по сну"},
+		{Command: "day", Description: "Сводка сна за день"},
+		{Command: "week", Description: "Сводка сна за 7 дней"},
+		{Command: "month", Description: "Сводка сна за 30 дней"},
+		{Command: "export_csv", Description: "Экспорт завершенных записей сна в CSV"},
+		{Command: "reminders", Description: "Настройки напоминаний"},
+		{Command: "settings", Description: "Настройки профиля"},
+		{Command: "invite", Description: "Создать код приглашения"},
+		{Command: "join", Description: "Присоединиться к семье по коду"},
+		{Command: "cancel", Description: "Отменить текущее действие"},
+	}
+
+	cmd := tgbotapi.NewSetMyCommands(commands...)
+	if _, err := botAPI.Request(cmd); err != nil {
+		log.Printf("setMyCommands failed: %v", err)
+	}
 }
 
 func logChildAge(db *sql.DB) {

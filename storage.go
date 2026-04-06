@@ -754,6 +754,21 @@ func (s *Store) ListCompletedSleepsSince(ctx context.Context, childID int64, sin
 	return collectSleepSessions(rows)
 }
 
+func (s *Store) ListAllCompletedSleeps(ctx context.Context, childID int64) ([]SleepSession, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, child_id, start_at, end_at, start_source, end_source, note, created_by, updated_by
+		FROM sleep_sessions
+		WHERE child_id = ? AND end_at IS NOT NULL
+		ORDER BY start_at ASC
+	`, childID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return collectSleepSessions(rows)
+}
+
 func (s *Store) GetLastCompletedSleep(ctx context.Context, childID int64) (*SleepSession, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, child_id, start_at, end_at, start_source, end_source, note, created_by, updated_by
