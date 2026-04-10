@@ -103,6 +103,7 @@ func registerTelegramCommands(botAPI *tgbotapi.BotAPI) {
 		{Command: "settings", Description: "Настройки профиля"},
 		{Command: "invite", Description: "Создать код приглашения"},
 		{Command: "join", Description: "Присоединиться к семье по коду"},
+		{Command: "server_status", Description: "Проверить состояние сервера"},
 		{Command: "cancel", Description: "Отменить текущее действие"},
 	}
 

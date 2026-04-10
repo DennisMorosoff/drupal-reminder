@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -247,6 +249,8 @@ func (b *SleepBot) handleCommand(ctx context.Context, userCtx UserContext, msg *
 		return b.sendTextWithKeyboard(msg.Chat.ID, fmt.Sprintf("Готово. Теперь вы привязаны к семье `%s`.", escapeTelegramMarkdown(joined.Family.Name)), b.mainKeyboard(false))
 	case "status":
 		return b.sendStatus(ctx, userCtx, msg.Chat.ID)
+	case "server_status":
+		return b.sendServerStatus(ctx, msg.Chat.ID)
 	case "report":
 		return b.sendDashboard(ctx, userCtx, msg.Chat.ID)
 	case "export_csv":
@@ -632,7 +636,7 @@ func (b *SleepBot) sendWelcome(userCtx UserContext, chatID int64) error {
 		"`/milestone_notify on|off`, `/milestone_report on|off`",
 		"",
 		"Полезные команды:",
-		"`/report`, `/day`, `/week`, `/month`, `/export_csv`, `/invite`, `/join CODE`, `/settings`, `/cancel`",
+		"`/report`, `/day`, `/week`, `/month`, `/export_csv`, `/invite`, `/join CODE`, `/settings`, `/cancel`, `/server_status`",
 		"`/silent_mode` — выключить все уведомления",
 		"`/reset_service confirm` — полная очистка данных",
 	}, "\n")
@@ -681,6 +685,53 @@ func (b *SleepBot) sendStatus(ctx context.Context, userCtx UserContext, chatID i
 	} else {
 		lines = append(lines, "Сейчас активного сна нет.")
 	}
+	return b.sendText(chatID, strings.Join(lines, "\n"))
+}
+
+func (b *SleepBot) sendServerStatus(ctx context.Context, chatID int64) error {
+	dbCtx, dbCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer dbCancel()
+
+	dbStatus := "доступна ✅"
+	if err := b.store.db.PingContext(dbCtx); err != nil {
+		dbStatus = "ошибка ❌ (" + escapeTelegramMarkdown(err.Error()) + ")"
+	}
+
+	httpCtx, httpCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer httpCancel()
+
+	healthURL := "http://127.0.0.1:8080/health"
+	healthStatus := "недоступен ❌"
+	req, reqErr := http.NewRequestWithContext(httpCtx, http.MethodGet, healthURL, nil)
+	if reqErr != nil {
+		healthStatus = "ошибка запроса ❌ (" + escapeTelegramMarkdown(reqErr.Error()) + ")"
+	} else if resp, err := http.DefaultClient.Do(req); err == nil {
+		defer resp.Body.Close()
+
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64))
+		bodyText := strings.TrimSpace(string(body))
+		switch {
+		case resp.StatusCode == http.StatusOK && strings.EqualFold(bodyText, "ok"):
+			healthStatus = "работает ✅"
+		case readErr != nil:
+			healthStatus = fmt.Sprintf("ошибка чтения ❌ (%s)", escapeTelegramMarkdown(readErr.Error()))
+		default:
+			healthStatus = fmt.Sprintf("неожиданный ответ ❌ (код %d, тело `%s`)", resp.StatusCode, escapeTelegramMarkdown(bodyText))
+		}
+	} else {
+		healthStatus = "ошибка ❌ (" + escapeTelegramMarkdown(err.Error()) + ")"
+	}
+
+	lines := []string{
+		"Статус сервера:",
+		"Бот: работает ✅",
+		fmt.Sprintf("База данных: %s", dbStatus),
+		fmt.Sprintf("Health `%s`: %s", escapeTelegramMarkdown(healthURL), healthStatus),
+		fmt.Sprintf("Версия: `%s`", escapeTelegramMarkdown(version)),
+		fmt.Sprintf("Сборка: `%s`", escapeTelegramMarkdown(buildTime)),
+		fmt.Sprintf("Коммит: `%s`", escapeTelegramMarkdown(commitHash)),
+	}
+
 	return b.sendText(chatID, strings.Join(lines, "\n"))
 }
 
